@@ -1,0 +1,3729 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Net;
+using System.IO;
+using System.Xml;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+using System.Xml.Serialization;
+using System.Collections.Specialized;
+using Newtonsoft.Json.Linq;
+using System.Drawing;
+using System.Web;
+
+namespace PSWebRequestSrv
+{
+    public delegate void delReceiveWebRequest(HttpListenerContext Context);
+
+    /// <summary>
+    /// Результат POST запроса
+    /// </summary>
+    public class PostRequestResult
+    {
+        /// <summary>
+        /// Данные ответа на запрос
+        /// </summary>
+        public string ResultData { get; set; }
+
+        /// <summary>
+        /// Код результат запроса
+        /// </summary>
+        public HttpStatusCode StatusCode { get; set; }
+
+        /// <summary>
+        /// Описание кода результат запроса
+        /// </summary>
+        public string StatusDescription { get; set; }
+
+        public PostRequestResult(HttpWebResponse responce, string ResultData)
+        {
+            this.StatusCode = responce.StatusCode;
+            this.StatusDescription = responce.StatusDescription;
+            this.ResultData = ResultData;            
+        }
+    }
+
+    public class RequestResult
+    {
+        /// <summary>
+        /// Код ошибки и ее описание (для JSON)
+        /// </summary>
+        public class ErrorResult
+        {
+            public int Code { get; set; }
+
+            public string Desc { get; set; }
+
+            public ErrorResult() { }
+        }
+
+        public string MethodName;
+        public string Message;
+        public int ResultCode; //1-ок; 2 - ошибка хранимой процедуры; 3- ошибка сервиса
+
+        public RequestResult() { }
+        public void CreateResult(HttpWebResponse response)
+        {
+            if (response != null)
+            {
+                this.Message = response.StatusDescription;
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    this.ResultCode = 1;
+                }
+                else
+                {
+                    this.ResultCode = 3;
+                }
+            }
+        }
+
+        public void CreateResult(string errorMessage) {
+            this.ResultCode = 3;
+            this.Message = errorMessage;
+        }
+
+        public RequestResult(string methodName)
+        {
+            this.MethodName = methodName;
+
+        }
+
+        public XmlDocument GetXml()
+        {
+            XmlDocument doc = new XmlDocument();
+            XmlElement root = (XmlElement)doc.AppendChild(doc.CreateElement(("root")));
+            XmlElement result = doc.CreateElement("result");
+            result.SetAttribute("MethodName", this.MethodName);
+            result.SetAttribute("Message", this.Message);
+            result.SetAttribute("ResultCode", this.ResultCode.ToString());
+            root.AppendChild(result);
+
+            //Укажем кодировку xml документа
+            XmlDeclaration xmldecl;
+            xmldecl = doc.CreateXmlDeclaration("1.0", null, null);
+            xmldecl.Encoding = "windows-1251";                          
+            doc.InsertBefore(xmldecl, root);
+            return doc;
+        }
+
+        public XmlDocument AddResultToXML(XmlDocument xdoc) {
+            XmlElement root = xdoc.DocumentElement;
+            XmlNode resultNode = xdoc.CreateElement("result");
+            XmlAttribute attrMethodName = xdoc.CreateAttribute("MethodName");
+            XmlAttribute attrMessage = xdoc.CreateAttribute("Message");
+            XmlAttribute attrResultCode = xdoc.CreateAttribute("ResultCode");
+            attrMethodName.Value = this.MethodName;
+            attrMessage.Value = this.Message;
+            attrResultCode.Value = this.ResultCode.ToString();
+            resultNode.Attributes.Append(attrMethodName);
+            resultNode.Attributes.Append(attrMessage);
+            resultNode.Attributes.Append(attrResultCode);
+            root.AppendChild(resultNode);
+
+            XmlDeclaration declaration = xdoc.ChildNodes.OfType<XmlDeclaration>().FirstOrDefault();
+            if (declaration == null)
+            {
+                //Укажем кодировку xml документа
+                XmlDeclaration xmldecl;
+                xmldecl = xdoc.CreateXmlDeclaration("1.0", null, null);
+                xmldecl.Encoding = "windows-1251";
+                xdoc.InsertBefore(xmldecl, root);
+            }
+
+            return xdoc;
+        }
+
+    }
+
+    public class Assistance
+    {
+        public class AssistanceSettings
+        {
+            public AssistanceSettings() { }
+
+            public AssistanceSettings(int assistanceID, int companyCode)
+            {
+                this.assistance_id = assistanceID;
+                this.company_code = companyCode;
+            }
+
+            [XmlAttribute("assistance_id")]
+            public int assistance_id { get; set; }
+
+            [XmlAttribute("company_code")]
+            public int company_code { get; set; }
+        }
+
+        /// <summary>
+        /// Balt Assistance (ПТИ)
+        /// </summary>
+        public class Balt
+        {
+            /// <summary>
+            /// Передача данных по заключенным договорам 
+            /// </summary>
+            public class UploadBardero
+            {
+                /// <summary>
+                /// Данные для отправки
+                /// </summary>                
+                public class RequestData
+                {
+                    public RequestData(XmlDocument xDoc)
+                    {
+                        this.data = new List<Data>();
+                        this.data.Add(new Data(xDoc));
+                        this.key = xDoc.SelectSingleNode("/root/method").Attributes["apiKey"].Value;
+                    }
+
+                    /// <summary>
+                    /// API ключ
+                    /// </summary>
+                    public string key { get; set; }
+
+                    /// <summary>
+                    /// Данные по договорам страхования
+                    /// </summary>
+                    public List<Data> data { get; set; }
+
+                    /// <summary>
+                    /// Данные по договору страхования
+                    /// </summary>
+                    public class Data
+                    {
+                        public Data(XmlDocument xDoc)
+                        {
+                            XmlAttribute attr = xDoc.SelectSingleNode("/root").Attributes["date_beg"];
+                            if (attr != null)
+                                this.date_beg = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.date_beg = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["date_end"];
+                            if (attr != null)
+                                this.date_end = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.date_end = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["date_of_issue"];
+                            if (attr != null)
+                                this.date_of_issue = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.date_of_issue = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["department"];
+                            if (attr != null)
+                                this.department = attr.Value;
+                            else
+                                this.department = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["dob"];
+                            if (attr != null)
+                                this.dob = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.dob = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["duration"];
+                            if (attr != null)
+                                this.duration = attr.Value;
+                            else
+                                this.duration = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["email"];
+                            if (attr != null)
+                                this.email = attr.Value;
+                            else
+                                this.email = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["exchange_rate"];
+                            if (attr != null)
+                                this.exchange_rate = attr.Value;
+                            else
+                                this.exchange_rate = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["fullname"];
+                            if (attr != null)
+                                this.fullname = attr.Value;
+                            else
+                                this.fullname = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_deduct"];
+                            if (attr != null)
+                                this.ins_stom_deduct = attr.Value;
+                            else
+                                this.ins_stom_deduct = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_deduct_currency_code"];
+                            if (attr != null)
+                                this.ins_stom_deduct_currency_code = attr.Value;
+                            else
+                                this.ins_stom_deduct_currency_code = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_deduct_currency_percent"];
+                            if (attr != null)
+                                this.ins_stom_deduct_currency_percent = attr.Value;
+                            else
+                                this.ins_stom_deduct_currency_percent = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_program"];
+                            if (attr != null)
+                                this.ins_stom_program = attr.Value;
+                            else
+                                this.ins_stom_program = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_program_id"];
+                            if (attr != null)
+                                this.ins_stom_program_id = new string[] { attr.Value };
+                            else
+                                this.ins_stom_program_id = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_sum"];
+                            if (attr != null)
+                                this.ins_stom_sum = attr.Value;
+                            else
+                                this.ins_stom_sum = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_stom_sum_currency_code"];
+                            if (attr != null)
+                                this.ins_stom_sum_currency_code = attr.Value;
+                            else
+                                this.ins_stom_sum_currency_code = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_deduct"];
+                            if (attr != null)
+                                this.ins_accident_deduct = attr.Value;
+                            else
+                                this.ins_accident_deduct = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_deduct_currency_code"];
+                            if (attr != null)
+                                this.ins_accident_deduct_currency_code = attr.Value;
+                            else
+                                this.ins_accident_deduct_currency_code = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_deduct_currency_percent"];
+                            if (attr != null)
+                                this.ins_accident_deduct_currency_percent = attr.Value;
+                            else
+                                this.ins_accident_deduct_currency_percent = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_program"];
+                            if (attr != null)
+                                this.ins_accident_program = attr.Value;
+                            else
+                                this.ins_accident_program = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_program_id"];
+                            if (attr != null)
+                                this.ins_accident_program_id = new string[] { attr.Value };
+                            else
+                                this.ins_accident_program_id = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_sum"];
+                            if (attr != null)
+                                this.ins_accident_sum = attr.Value;
+                            else
+                                this.ins_accident_sum = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_accident_sum_currency_code"];
+                            if (attr != null)
+                                this.ins_accident_sum_currency_code = attr.Value;
+                            else
+                                this.ins_accident_sum_currency_code = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_deduct"];
+                            if (attr != null)
+                                this.ins_med_deduct = attr.Value;
+                            else
+                                this.ins_med_deduct = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_deduct_currency_code"];
+                            if (attr != null)
+                                this.ins_med_deduct_currency_code = attr.Value;
+                            else
+                                this.ins_med_deduct_currency_code = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_deduct_currency_percent"];
+                            if (attr != null)
+                                this.ins_med_deduct_currency_percent = attr.Value;
+                            else
+                                this.ins_med_deduct_currency_percent = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_program"];
+                            if (attr != null)
+                                this.ins_med_program = attr.Value;
+                            else
+                                this.ins_med_program = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_program_id"];
+                            if (attr != null)
+                                this.ins_med_program_id = new string[] { attr.Value };
+                            else
+                                this.ins_med_program_id = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_sum"];
+                            if (attr != null)
+                                this.ins_med_sum = attr.Value;
+                            else
+                                this.ins_med_sum = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_med_sum_currency_code"];
+                            if (attr != null)
+                                this.ins_med_sum_currency_code = attr.Value;
+                            else
+                                this.ins_med_sum_currency_code = null;
+
+                            XmlNodeList coefs = xDoc.SelectNodes("/root/coefs/coef");
+                            this.ins_ratio = new string[coefs.Count];
+                            for (var i = 0; i < coefs.Count; i++)
+                                this.ins_ratio[i] = coefs[i].Attributes["ins_ratio"].Value;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_rules"];
+                            if (attr != null)
+                                this.ins_rules = attr.Value;
+                            else
+                                this.ins_rules = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["ins_rules_id"];
+                            if (attr != null)
+                                this.ins_rules_id = new string[] { attr.Value };
+                            else
+                                this.ins_rules_id = null;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["insurer"];
+                            if (attr != null)
+                                this.insurer = attr.Value;
+                            else
+                                this.insurer = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["passport"];
+                            if (attr != null)
+                                this.passport = attr.Value;
+                            else
+                                this.passport = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["person_guid"];
+                            if (attr != null)
+                                this.person_guid = attr.Value;
+                            else
+                                this.person_guid = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["phone_number"];
+                            if (attr != null)
+                                this.phone_number = attr.Value;
+                            else
+                                this.phone_number = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["policy_guid"];
+                            if (attr != null)
+                                this.policy_guid = attr.Value;
+                            else
+                                this.policy_guid = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["policy_number"];
+                            if (attr != null)
+                                this.policy_number = attr.Value;
+                            else
+                                this.policy_number = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["policy_type"];
+                            if (attr != null)
+                                this.policy_type = attr.Value;
+                            else
+                                this.policy_type = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["premium"];
+                            if (attr != null)
+                                this.premium = attr.Value;
+                            else
+                                this.premium = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["premium_currency_code"];
+                            if (attr != null)
+                                this.premium_currency_code = attr.Value;
+                            else
+                                this.premium_currency_code = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["premium_national"];
+                            if (attr != null)
+                                this.premium_national = attr.Value;
+                            else
+                                this.premium_national = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["sales_channel"];
+                            if (attr != null)
+                                this.sales_channel = attr.Value;
+                            else
+                                this.sales_channel = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["territory"];
+                            if (attr != null)
+                                this.territory = attr.Value;
+                            else
+                                this.territory = string.Empty;
+
+                            XmlNodeList territoryCodes = xDoc.SelectNodes("/root/countries/country");
+                            this.territory_code = new string[territoryCodes.Count];
+                            this.territory_id = new string[territoryCodes.Count];
+
+                            for (var i = 0; i < territoryCodes.Count; i++)
+                            {
+                                this.territory_code[i] = territoryCodes[i].Attributes["territory_code"].Value;
+                                this.territory_id[i] = territoryCodes[i].Attributes["territory_id"].Value;
+                            }
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["test_data"];
+                            if (attr != null)
+                                this.test_data = attr.Value == "1" ? "true" : "false";
+                            else
+                                this.test_data = "false";
+
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["vip"];
+                            if (attr != null)
+                                this.vip = attr.Value == "1" ? "true" : "false";
+                            else
+                                this.vip = "false";
+
+                        }
+
+                        /// <summary>
+                        /// бозначение тестовых данных(1 - тест; 0 - боевые)
+                        /// </summary>                    
+                        public string test_data { get; set; }
+
+                        /// <summary>
+                        /// Уникальный идентификатор полиса в БД СК
+                        /// </summary>                    
+                        public string policy_guid { get; set; }
+
+                        /// <summary>
+                        /// Серия и номер договора страхования (полиса)
+                        /// </summary>
+                        public string policy_number { get; set; }
+
+                        /// <summary>
+                        /// Тип договора страхования (0 - полис, 1 - памятка)
+                        /// </summary>
+                        public string policy_type { get; set; }
+
+                        /// <summary>
+                        /// Уникальный идентификатор застрахованного лица в БД СК
+                        /// </summary>                    
+                        public string person_guid { get; set; }
+
+                        /// <summary>
+                        /// ФИО застрахованного лица (на английском)
+                        /// </summary>
+                        public string fullname { get; set; }
+
+                        /// <summary>
+                        /// Дата рождения
+                        /// </summary>
+                        public string dob { get; set; }
+
+                        /// <summary>
+                        /// VIP-клиент
+                        /// </summary>
+                        public string vip { get; set; }
+
+                        /// <summary>
+                        /// Дата оформления
+                        /// </summary>
+                        public string date_of_issue { get; set; }
+
+                        /// <summary>
+                        /// Дата начала действия договора
+                        /// </summary>
+                        public string date_beg { get; set; }
+
+                        /// <summary>
+                        /// Дата окончания действия договора
+                        /// </summary>
+                        public string date_end { get; set; }
+
+                        /// <summary>
+                        /// Продолжительность поездки (дн.)
+                        /// </summary>
+                        public string duration { get; set; }
+
+                        /// <summary>
+                        /// Cтрахователь (ФИО на английском)
+                        /// </summary>
+                        public string insurer { get; set; }
+
+                        /// <summary>
+                        /// Канал продаж
+                        /// </summary>
+                        public string sales_channel { get; set; }
+
+                        /// <summary>
+                        /// Подразделениe (агент)
+                        /// </summary>                    
+                        public string department { get; set; }
+
+                        /// <summary>
+                        /// ID территории страхования из справочника страховой компании
+                        /// </summary>
+                        public string[] territory_id { get; set; }
+
+                        /// <summary>
+                        /// Коды перечня стран в формате ISO Альфа-3
+                        /// </summary>
+                        public string[] territory_code { get; set; }
+
+                        /// <summary>
+                        /// Территория страхования
+                        /// </summary>
+                        public string territory { get; set; }
+
+                        /// <summary>
+                        /// ID программы в справочнике страховой компании
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string[] ins_med_program_id { get; set; }
+
+                        /// <summary>
+                        /// Программа страхования по риску “Медицинские расходы”
+                        /// </summary>
+                        public string ins_med_program { get; set; }
+
+                        /// <summary>
+                        /// Страховая сумма по риску “Медицинские расходы”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_med_sum { get; set; }
+
+                        /// <summary>
+                        /// Валюта страховой суммы по риску “Медицинские расходы” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_med_sum_currency_code { get; set; }
+
+                        /// <summary>
+                        /// Франшиза по риску “Медицинские расходы”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_med_deduct { get; set; }
+
+                        /// <summary>
+                        /// Валюта франшизы по риску “Медицинские расходы” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_med_deduct_currency_code { get; set; }
+
+                        /// <summary>
+                        /// Франшиза по риску “Медицинские расходы” в %
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_med_deduct_currency_percent { get; set; }
+
+                        /// <summary>
+                        /// ID программы в справочнике СК
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string[] ins_accident_program_id { get; set; }
+
+                        /// <summary>
+                        /// Программа страхования по риску “Несчастный случай”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_program { get; set; }
+
+                        /// <summary>
+                        /// Страховая сумма по риску “Несчастный случай”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_sum { get; set; }
+
+                        /// <summary>
+                        /// Валюта страховой суммы по риску “Несчастный случай” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_sum_currency_code { get; set; }
+
+                        /// <summary>
+                        /// Франшиза по риску “Несчастный случай”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_deduct { get; set; }
+
+                        /// <summary>
+                        /// Валюта франшизы по риску “Несчастный случай” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_deduct_currency_code { get; set; }
+
+                        /// <summary>
+                        /// Франшиза по риску “Несчастный случай” в %
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_accident_deduct_currency_percent { get; set; }
+
+                        /// <summary>
+                        /// ID программы в справочнике СК
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string[] ins_stom_program_id { get; set; }
+
+                        /// <summary>
+                        /// программа страхования по риску “Стоматология”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_program { get; set; }
+
+                        /// <summary>
+                        /// страховая сумма по риску “Стоматология”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_sum { get; set; }
+
+                        /// <summary>
+                        /// валюта страховой суммы по риску “Стоматология” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_sum_currency_code { get; set; }
+
+                        /// <summary>
+                        /// франшиза по риску “Стоматология”
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_deduct { get; set; }
+
+                        /// <summary>
+                        /// валюта франшизы по риску “Стоматология” в формате ISO Альфа-3
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_deduct_currency_code { get; set; }
+
+                        /// <summary>
+                        /// франшиза по риску “Стоматология” в %
+                        /// </summary>
+                        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+                        public string ins_stom_deduct_currency_percent { get; set; }
+
+                        /// <summary>
+                        /// ID правил страхования в справочнике СК
+                        /// </summary>
+                        public string[] ins_rules_id { get; set; }
+
+                        /// <summary>
+                        /// Правила страхования
+                        /// </summary>
+                        public string ins_rules { get; set; }
+
+                        /// <summary>
+                        /// Перечень коэффициентов
+                        /// </summary>
+                        public string[] ins_ratio { get; set; }
+
+                        /// <summary>
+                        /// Страховая премия
+                        /// </summary>
+                        public string premium { get; set; }
+
+                        /// <summary>
+                        /// Валюта страховой премии
+                        /// </summary>
+                        public string premium_currency_code { get; set; }
+
+                        /// <summary>
+                        /// Премия в национальной валюте
+                        /// </summary>
+                        public string premium_national { get; set; }
+
+                        /// <summary>
+                        /// Курс валюты
+                        /// </summary>
+                        public string exchange_rate { get; set; }
+
+                        /// <summary>
+                        /// Паспорт
+                        /// </summary>
+                        public string passport { get; set; }
+
+                        /// <summary>
+                        /// Контактный телефон в стране проживания
+                        /// </summary>
+                        public string phone_number { get; set; }
+
+                        /// <summary>
+                        /// Адрес электронной почты
+                        /// </summary>
+                        public string email { get; set; }
+
+                        ///// <summary>
+                        ///// ID программы в справочнике СК
+                        ///// </summary>
+                        //public string[] ins_bag_program_id { get; set; }
+
+                        ///// <summary>
+                        ///// программа страхования по риску “Утеря багажа”
+                        ///// </summary>
+                        //public string ins_bag_program { get; set; }
+
+                        ///// <summary>
+                        ///// страховая сумма по риску “Утеря багажа”
+                        ///// </summary>
+                        //public string ins_bag_sum { get; set; }
+
+                        ///// <summary>
+                        ///// валюта страховой суммы по риску “Утеря багажа”
+                        ///// </summary>
+                        //public string ins_bag_sum_currency_code { get; set; }
+
+                        ///// <summary>
+                        ///// франшиза по риску “Утеря багажа”
+                        ///// </summary>
+                        //public string ins_bag_deduct { get; set; }
+
+                        ///// <summary>
+                        ///// валюта франшизы по риску “Утеря багажа” в формате ISO Альфа-3
+                        ///// </summary>
+                        //public string ins_bag_deduct_currency_code { get; set; }
+
+                        ///// <summary>
+                        ///// франшиза по риску “Утеря багажа” в %
+                        ///// </summary>
+                        //public string ins_bag_deduct_currency_percent { get; set; }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Обновление данных по ранее переданным договорам
+            /// </summary>
+            public class UpdateBardero : UploadBardero
+            {
+
+            }
+
+            /// <summary>
+            /// Удаление ранее переданных договоров
+            /// </summary>
+            public class DeleteBardero
+            {
+                /// <summary>
+                /// Данные для отправки
+                /// </summary>   
+                public class RequestData
+                {
+                    public RequestData(XmlDocument xDoc)
+                    {
+                        this.data = new List<Data>();
+                        this.data.Add(new Data(xDoc));
+                        this.key = xDoc.SelectSingleNode("/root/method").Attributes["apiKey"].Value;
+                    }
+                    /// <summary>
+                    /// API ключ
+                    /// </summary>
+                    public string key { get; set; }
+
+                    /// <summary>
+                    /// Данные по договорам страхования
+                    /// </summary>
+                    public List<Data> data { get; set; }
+
+                    /// <summary>
+                    /// Данные по договору страхования
+                    /// </summary>
+                    public class Data
+                    {
+                        public Data(XmlDocument xDoc)
+                        {
+                            XmlAttribute attr = xDoc.SelectSingleNode("/root").Attributes["date_dissolution"];
+                            if (attr != null)
+                                this.date_dissolution = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.date_dissolution = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["policy_guid"];
+                            if (attr != null)
+                                this.policy_guid = attr.Value;
+                            else
+                                this.policy_guid = string.Empty;
+                        }
+
+                        /// <summary>
+                        /// Уникальный идентификатор полиса в базе данных страховой компании
+                        /// </summary>
+                        public string policy_guid { get; set; }
+
+                        /// <summary>
+                        /// Дата расторжения договора
+                        /// </summary>
+                        public string date_dissolution { get; set; }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Удаление конкретного лица из ранее переданного догвоора
+            /// </summary>
+            public class DeleteInsuredPerson
+            {
+                /// <summary>
+                /// Данные для отправки
+                /// </summary>     
+                public class RequestData
+                {
+                    public RequestData(XmlDocument xDoc)
+                    {
+                        this.data = new List<Data>();
+                        this.data.Add(new Data(xDoc));
+                        this.key = xDoc.SelectSingleNode("/root/method").Attributes["apiKey"].Value;
+                    }
+                    /// <summary>
+                    /// API ключ
+                    /// </summary>
+                    public string key { get; set; }
+
+                    /// <summary>
+                    /// Данные по договорам страхования
+                    /// </summary>
+                    public List<Data> data { get; set; }
+
+                    /// <summary>
+                    /// Данные по договору страхования
+                    /// </summary>
+                    public class Data
+                    {
+                        public Data(XmlDocument xDoc)
+                        {
+                            XmlAttribute attr = xDoc.SelectSingleNode("/root").Attributes["date_dissolution"];
+                            if (attr != null)
+                                this.date_dissolution = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                            else
+                                this.date_dissolution = string.Empty;
+
+                            attr = xDoc.SelectSingleNode("/root").Attributes["person_guid"];
+                            if (attr != null)
+                                this.person_guid = attr.Value;
+                            else
+                                this.person_guid = string.Empty;
+                        }
+
+                        /// <summary>
+                        /// Уникальный идентификатор застрахованного лица в базе данных страховой компании
+                        /// </summary>
+                        public string person_guid { get; set; }
+
+                        /// <summary>
+                        /// Дата расторжения договора
+                        /// </summary>
+                        public string date_dissolution { get; set; }
+                    }
+
+                }
+            }
+
+            public class ResponceData
+            {
+                public ResponceData() { }
+
+                /// <summary>
+                /// Переопределяет полученные статусы на наши (an10011)
+                /// </summary>
+                public void InitStatuses()
+                {
+                    switch (this.status_code)
+                    {
+                        case 0: this.status_code = 2; break;
+                        case 1: this.status_code = 3; break;
+                        case 2: this.status_code = 4; break;
+                        case 3: this.status_code = 5; break;
+                        case 4: this.status_code = 6; break;
+                        default: this.status_code = -1; break;
+                    }
+                }
+
+                public XmlDocument GetXml()
+                {
+                    XmlDocument doc = new XmlDocument();
+                    XmlElement root = (XmlElement)doc.AppendChild(doc.CreateElement(("root")));
+                    XmlElement result = doc.CreateElement("responce");
+                    result.SetAttribute("status_code", this.status_code.ToString());
+                    string totalError = string.Empty;
+
+                    if (this.detailed != null)
+                    {
+                        foreach (string err in this.detailed)
+                            totalError += err + ", ";
+
+                        totalError = totalError.Remove(totalError.Length - 2);
+                        this.text_status += ": " + totalError;
+                    }
+
+                    result.SetAttribute("text_status", this.text_status.ToString());
+
+                    root.AppendChild(result);
+
+                    //Укажем кодировку xml документа
+                    XmlDeclaration xmldecl;
+                    xmldecl = doc.CreateXmlDeclaration("1.0", null, null);
+                    xmldecl.Encoding = "windows-1251";
+                    doc.InsertBefore(xmldecl, root);
+                    return doc;
+                }
+
+
+                /// <summary>
+                /// Статус отправки запроса
+                /// 0 -	Бордеро корректно загружено
+                /// 1 - Неверное обращение к API 
+                /// 2 - Неверный API - ключ 
+                /// 3 - Не переданы данные 
+                /// 4 - Неверно переданный JSON 
+                /// </summary>
+                public int status_code { get; set; }
+
+                /// <summary>
+                /// Результат отправки запроса
+                /// OK: Бордеро корректно загружено
+                /// Некорректный запрос к API: Неверное обращение к API 
+                /// Некорректный ключ API: Неверный API - ключ
+                /// Отсутствуют данные: Проблемы с передаваемыми данными
+                /// Некорректный JSON #0 - Неверно переданный JSON
+                /// </summary>
+                public string text_status { get; set; }
+
+                /// <summary>
+                /// Список ошибок
+                /// </summary>
+                public string[] detailed { get; set; }
+            }
+
+            /// <summary>
+            /// Установка web hook
+            /// </summary>
+            public class SetWebHook
+            {
+                /// <summary>
+                /// Данные для отправки
+                /// </summary>
+                public class RequestData
+                {
+                    public string GetFileNotificationChoice()
+                    {
+                        string result = "{";
+                        for (int i = 0; i < this.fileNotificationChoice.Length; i++)
+                        {
+                            if (i != 0 && (i - 1) != this.fileNotificationChoice.Length)
+                            {
+                                result += ", ";
+                            }
+                            result += this.fileNotificationChoice[i];
+                        }
+                        result += "}";
+
+                        return result;
+                    }
+
+                    public RequestData(XmlDocument xDoc)
+                    {
+                        this.key = xDoc.SelectSingleNode("/root/method").Attributes["apiKey"].Value;
+                        this.fileNotificationChoice = xDoc.SelectSingleNode("/root").Attributes["fileNotificationChoice"].Value.Split(new char[] { ',' }, 
+                            StringSplitOptions.RemoveEmptyEntries);
+                        this.link = xDoc.SelectSingleNode("/root").Attributes["link"].Value;
+                    }
+                    /// <summary>
+                    /// Уникальный идентификатор
+                    /// </summary>
+                    public string key { get; set; }
+
+                    /// <summary>
+                    /// Принимает значения в формате { file, notification }
+                    /// Принимает в себя один из трех параметров: file, notification или оба параметра сразу. 
+                    /// Отправление файлов, уведомление о том, что файлы можно скачать, оба условия сразу
+                    /// </summary>
+                    public string[] fileNotificationChoice { get; set; }
+
+                    /// <summary>
+                    /// Адрес, принимающий запросы
+                    /// </summary>
+                    public string link { get; set; }
+                }
+
+            }
+
+            /// <summary>
+            /// Загрузка убытков
+            /// </summary>
+            public class DownloadLosses
+            {
+                /// <summary>
+                /// Данные для отправки
+                /// </summary>
+                public class RequestData
+                {
+                    public RequestData(XmlDocument xDoc)
+                    {
+                        this.key = xDoc.SelectSingleNode("/root/method").Attributes["apiKey"].Value;
+
+                        XmlAttribute attr = xDoc.SelectSingleNode("/root").Attributes["dateBeg"];
+                        if (attr != null)
+                            this.dateBeg = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                        else
+                            this.dateBeg = string.Empty;
+
+                        attr = xDoc.SelectSingleNode("/root").Attributes["dateEnd"];
+                        if (attr != null)
+                            this.dateEnd = attr.Value == "1900-01-01T00:00:00" ? string.Empty : DateTime.Parse(attr.Value).ToString();
+                        else
+                            this.dateEnd = string.Empty;
+                    }
+
+                    /// <summary>
+                    /// API ключ
+                    /// </summary>
+                    public string key { get; set; }
+
+                    /// <summary>
+                    /// Дата, с которой начинать сбор данных
+                    /// </summary>
+                    public string dateBeg { get; set; }
+
+                    /// <summary>
+                    /// Дата, по которую собирать данные
+                    /// </summary>
+                    public string dateEnd { get; set; }
+
+                }
+
+                [Serializable]
+                [XmlRoot("responceDataList")]
+                [XmlType("responceDataList", Namespace = "")]
+                public class ResponceDataList
+                {
+                    public ResponceDataList() { }
+
+                    public ResponceDataList(List<ResponceData> responceDataList, int assistanceID, int companyCode) {
+                        this.responceDataList = responceDataList;
+                        this.settings = new AssistanceSettings(assistanceID, companyCode);
+                    }
+
+                    [XmlElement("settings")]
+                    public AssistanceSettings settings { get; set; }
+
+                    [XmlElement("ResponceData")]
+                    public List<ResponceData> responceDataList { get; set; }
+                }
+
+                /// <summary>
+                /// Объект ответа
+                /// </summary>
+                [Serializable]
+                [XmlType("ResponceData", Namespace = "")]
+                [XmlRoot("ResponceData")]
+                public class ResponceData
+                {
+                    /// <summary>
+                    /// Результат отправки запроса
+                    /// OK: Бордеро корректно загружено
+                    /// Некорректный запрос к API: Неверное обращение к API 
+                    /// Некорректный ключ API: Неверный API - ключ
+                    /// Отсутствуют данные: Проблемы с передаваемыми данными
+                    /// Некорректный JSON #0 - Неверно переданный JSON
+                    /// </summary>
+                    [XmlAttribute("text_status")]
+                    public string text_status { get; set; }
+
+                    /// <summary>
+                    /// ID записи в БД Ассистанса
+                    /// </summary>
+                    [XmlAttribute("id_case")]
+                    public string id_case { get; set; }
+
+                    /// <summary>
+                    /// Номер дела
+                    /// </summary>
+                    [XmlAttribute("ref_nr")]
+                    public string ref_nr { get; set; }
+
+                    /// <summary>
+                    /// Статус обращения
+                    /// </summary>
+                    [XmlAttribute("status_code")]
+                    public string status_code { get; set; }
+
+                    /// <summary>
+                    /// Наименование статуса
+                    /// </summary>
+                    [XmlAttribute("status_name")]
+                    public string status_name { get; set; }
+
+                    /// <summary>
+                    /// Подстатус обращения
+                    /// </summary>
+                    [XmlAttribute("substatus_code")]
+                    public string substatus_code { get; set; }
+
+                    /// <summary>
+                    /// Наименование подстатуса
+                    /// </summary>
+                    [XmlAttribute("substatus_name")]
+                    public string substatus_name { get; set; }
+
+                    /// <summary>
+                    /// Серия полиса
+                    /// </summary>
+                    [XmlAttribute("policy_series")]
+                    public string policy_series { get; set; }
+
+                    /// <summary>
+                    /// Номер полиса
+                    /// </summary>
+                    [XmlAttribute("policy_nr")]
+                    public string policy_nr { get; set; }
+
+                    /// <summary>
+                    /// Дата начала действия полиса
+                    /// </summary>
+                    [XmlAttribute("date_beg")]
+                    public string date_beg { get; set; }
+
+                    /// <summary>
+                    /// Дата окончания действия полиса
+                    /// </summary>
+                    [XmlAttribute("date_end")]
+                    public string date_end { get; set; }
+
+                    /// <summary>
+                    /// Количество дней пребывания
+                    /// </summary>
+                    [XmlAttribute("duration")]
+                    public string duration { get; set; }
+
+                    /// <summary>
+                    /// Территория страхования
+                    /// </summary>
+                    [XmlAttribute("territory")]
+                    public string territory { get; set; }
+
+                    /// <summary>
+                    /// ФИО застрахованного лица
+                    /// </summary>
+                    [XmlAttribute("fullname")]
+                    public string fullname { get; set;}
+
+                    /// <summary>
+                    /// Дата рождения застрахованного лица
+                    /// </summary>
+                    [XmlAttribute("dob")]
+                    public string dob { get; set; }
+
+                    /// <summary>
+                    /// Страховая сумма по риску “Медицинские расходы” 
+                    /// </summary>
+                    [XmlAttribute("ins_med_sum")]
+                    public string ins_med_sum { get; set; }
+
+                    /// <summary>
+                    /// валюта страховой суммы по риску “Медицинские расходы” в формате ISO Альфа-3 
+                    /// </summary>
+                    [XmlAttribute("ins_med_sum_currency_code")]
+                    public string ins_med_sum_currency_code { get; set; }
+
+                    /// <summary>
+                    /// франшиза по риску “Медицинские расходы”
+                    /// </summary>
+                    [XmlAttribute("ins_med_deduct")]
+                    public string ins_med_deduct { get; set; }
+
+                    /// <summary>
+                    /// валюта франшизы по риску “Медицинские расходы” в формате ISO Альфа-3 
+                    /// </summary>
+                    [XmlAttribute("ins_med_deduct_currency_code")]
+                    public string ins_med_deduct_currency_code { get; set; }
+
+                    /// <summary>
+                    /// Тип помощи
+                    /// </summary>
+                    [XmlAttribute("aid_type")]
+                    public string aid_type { get; set; }
+
+                    /// <summary>
+                    /// Обстоятельства происшествия
+                    /// </summary>
+                    [XmlAttribute("circumstances")]
+                    public string circumstances { get; set; }
+
+                    /// <summary>
+                    /// Наименование диагноза
+                    /// </summary>
+                    [XmlAttribute("diagnose")]
+                    public string diagnose { get; set; }
+
+                    /// <summary>
+                    /// Код диагноза по МКБ-10
+                    /// </summary>
+                    [XmlAttribute("diagnose_icd")]
+                    public string diagnose_icd { get; set; }
+
+                    /// <summary>
+                    /// Дата появления первых симптомов
+                    /// </summary>
+                    [XmlAttribute("first_symptom_date")]
+                    public string first_symptom_date { get; set; }
+
+                    /// <summary>
+                    /// Дата помощи по первому обращению
+                    /// </summary>
+                    [XmlAttribute("help_date_first")]
+                    public string help_date_first { get; set; }
+
+                    /// <summary>
+                    /// Дата помощи по каждому обращению
+                    /// </summary>
+                    [XmlAttribute("help_date_each")]
+                    public string help_date_each { get; set; }
+
+                    /// <summary>
+                    /// Дата регистрации случая
+                    /// </summary>
+                    [XmlAttribute("date_registered")]
+                    public string date_registered { get; set; }
+
+                    /// <summary>
+                    /// Сумма счета провайдера
+                    /// </summary>
+                    [XmlAttribute("provider_sum")]
+                    public string provider_sum { get; set; }
+
+                    /// <summary>
+                    /// Валюта счета провайдера
+                    /// </summary>
+                    [XmlAttribute("provider_currency")]
+                    public string provider_currency { get; set; }
+
+                    /// <summary>
+                    /// Cумма счета ассистанса
+                    /// </summary>
+                    [XmlAttribute("fee_sum")]
+                    public string fee_sum { get; set; }
+
+                    /// <summary>
+                    /// Валюта счета ассистенса в формате ISO Альфа-3
+                    /// </summary>
+                    [XmlAttribute("fee_currency")]
+                    public string fee_currency { get; set; }
+
+                    /// <summary>
+                    /// Сумма данных гарантий по случаю (РЗУ)
+                    /// </summary>
+                    [XmlAttribute("rzu_sum")]
+                    public string rzu_sum { get; set; }
+
+                    /// <summary>
+                    /// Валюта суммы гарантий в формате ISO Альфа-3
+                    /// </summary>
+                    [XmlAttribute("rzu_currency")]
+                    public string rzu_currency { get; set; }
+
+                    /// <summary>
+                    /// Провайдер
+                    /// </summary>
+                    [XmlAttribute("provider")]
+                    public string provider { get; set; }
+
+                    /// <summary>
+                    /// Мобильный телефон застрахованного лица
+                    /// </summary>
+                    [XmlAttribute("phone_number")]
+                    public string phone_number { get; set; }
+
+                    /// <summary>
+                    /// Страна пребывания застрахованного лица
+                    /// </summary>
+                    [XmlAttribute("country")]
+                    public string country { get; set; }
+
+                    /// <summary>
+                    /// Код страны пребывания застрахованного лица в формате ISO Альфа-3
+                    /// </summary>
+                    [XmlAttribute("country_iso")]
+                    public string country_iso { get; set; }
+
+                    /// <summary>
+                    /// Город пребывания
+                    /// </summary>
+                    [XmlAttribute("visit_city")]
+                    public string visit_city { get; set; }
+
+                    /// <summary>
+                    /// Отель пребывания
+                    /// </summary>
+                    [XmlAttribute("hotel")]
+                    public string hotel { get; set; }
+
+                    /// <summary>
+                    /// Адрес пребывания 
+                    /// </summary>
+                    [XmlAttribute("address")]
+                    public string address { get; set; }
+
+                    /// <summary>
+                    /// Наличие файлов в деле(boolean: true или false)
+                    /// </summary>
+                    [XmlAttribute("has_file")]
+                    public string has_file { get; set; }
+
+                    /// <summary>
+                    /// Номер счета
+                    /// </summary>
+                    [XmlAttribute("refund_invoice_nr")]
+                    public string refund_invoice_nr { get; set; }
+
+                    /// <summary>
+                    /// Сумма по счету 
+                    /// </summary>
+                    [XmlAttribute("refund_sum")]
+                    public string refund_sum { get; set; }
+
+                    /// <summary>
+                    /// Валюта счета
+                    /// </summary>
+                    [XmlAttribute("refund_currency")]
+                    public string refund_currency { get; set; }
+
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Класс для работы с данными, предоставленными по электронному извещению о ДТП для регистрации страхового случая по 
+    /// договору обязательного страхования гражданской ответственности владельцев транспортных средств
+    /// </summary>
+    public class BTIBNotice
+    {
+        /// <summary>
+        /// Запрос
+        /// </summary>
+        public class RequestData
+        {
+            /// <summary>
+            /// Код страховой организации
+            /// 01-   БРУСП Белгосстрах
+            /// 02 – ЗАСО «ТАСК»
+            /// 03 – ЗАСО «Белнефтестрах»
+            /// 07 – ЗАСО «Промтрансинвест»
+            /// 12 – СООО «Белкоопстрах»
+            /// 13 – БРУПЭИС «Белэксимгарант»
+            /// </summary>
+            public string Company { get; set; }
+
+            /// <summary>
+            /// Номер сервиса
+            /// 64 – предоставление данных по извещению
+            /// </summary>
+            public string Service { get; set; }
+
+            /// <summary>
+            /// Дата и время отправки запроса (YYYYMMDDhhmiss)
+            /// </summary>
+            public string DateTime { get; set; }
+
+            /// <summary>
+            /// Аутентификация (набор символов)
+            /// </summary>
+            public string Auth { get; set; }
+
+            /// <summary>
+            /// Серия и Номер извещения о ДТП
+            /// </summary>
+            public string NoticeNum { get; set; }
+
+            /// <summary>
+            /// Регистрационный знак транспортного средства (передается слитно без разделительных черточек). В номере регистрационного знака ТС 
+            /// можно использовать латиницу и кириллицу. Передается номер либо причинителя вреда, либо потерпевшего.
+            /// </summary>
+            public string VehSign { get; set; }
+
+            public RequestData(XmlDocument xDoc)
+            {
+                this.Company = xDoc.SelectSingleNode("/root/method").Attributes["BTIBCompanyCode"].Value;
+                this.Service = xDoc.SelectSingleNode("/root/method").Attributes["serviceTypeCode"].Value;
+                this.DateTime = xDoc.SelectSingleNode("/root/method").Attributes["dateTime"].Value;
+                this.Auth = xDoc.SelectSingleNode("/root/method").Attributes["auth"].Value;
+                this.NoticeNum = xDoc.SelectSingleNode("/root/method").Attributes["noticeSeriesAndNumber"].Value;
+                this.VehSign = xDoc.SelectSingleNode("/root/method").Attributes["autoNumber"].Value;
+            }
+
+            public RequestData() { }
+        }
+
+        /// <summary>
+        /// Результат
+        /// </summary>
+        [XmlRoot("root")]
+        public class Result
+        {
+            [XmlElement("notice")]
+            public ResponceData responceData { get; set; }
+
+            public Result(ResponceData responceData)
+            {
+                this.responceData = responceData;
+            }
+
+            public Result() { }
+        }
+
+        /// <summary>
+        /// Ответ
+        /// </summary>        
+        public class ResponceData
+        {
+            /// <summary>
+            /// Номер ответа на запрос
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ResponseNum")]
+            public string ResponseNum { get; set; }
+
+            /// <summary>
+            /// Серия и Номер извещения о ДТП
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("NoticeNum")]
+            public string NoticeNum { get; set; }
+
+            /// <summary>
+            /// Дата и время регистрации извещения YYYYMMDDhhmm
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("DateNotice")]
+            public string DateNotice { get; set; }
+
+            /// <summary>
+            ///  Дата ДТП YYYYMMDD
+            ///  (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("DateDTP")]
+            public string DateDTP { get; set; }
+
+            /// <summary>
+            /// Время ДТП в формате  HH:МI
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("TimeDTP")]
+            public string TimeDTP { get; set; }
+
+            /// <summary>
+            /// Место ДТП
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("DTPAddress")]
+            public string DTPAddress { get; set; }
+
+            /// <summary>
+            /// Геолокация координаты (широта и долгота через точку с запятой)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeoLocation")]
+            public string GeoLocation { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Уникальный идентификатор страхователя(личный номер для физического лица)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AInsuredIdNo")]
+            public string AInsuredIdNo { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Фамилия, имя, отчество физического лица, ИП / наименование юридического лица страхователя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AInsuredName")]
+            public string AInsuredName { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Код района или города регистрации страхователя по справочнику кодов территорий
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AInsuredAddrCode")]
+            public string AInsuredAddrCode { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Адрес страхователя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AInsuredAddress")]
+            public string AInsuredAddress { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Уникальный идентификатор ТС(номер кузова ТС (VIN) или номер шасси прицепа)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ABodyNo")]
+            public string ABodyNo { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Тип ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AVehType")]
+            public string AVehType { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Марка ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AVehMark")]
+            public string AVehMark { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Регистрационный знак ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AVehSign")]
+            public string AVehSign { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Фамилия, имя, отчество физического лица, ИП / наименование юридического лица собственника ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AOwnerName")]
+            public string AOwnerName { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Адрес собственника ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AOwnerAddress")]
+            public string AOwnerAddress { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда.
+            /// Код страховой организации заключившей договор
+            /// 01-   БРУСП Белгосстрах
+            /// 02 – ЗАСО «ТАСК»
+            /// 03 – ЗАСО «Белнефтестрах»
+            ///07 – ЗАСО «Промтрансинвест»
+            /// 12 – СООО «Белкоопстрах»
+            /// 13 – БРУПЭИС «Белэксимгарант»
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ACompany")]
+            public string ACompany { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Серия и номер договора страхования
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("APolicyNum")]
+            public string APolicyNum { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда.
+            /// Тип документа о страховании:
+            /// S – договор внутреннего страхования,
+            /// К – договор комплексного внутреннего страхования
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("AInsDoc")]
+            public string AInsDoc { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Дата начала действия договора YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADateBeg")]
+            public string ADateBeg { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Время начала действия договора в формате HH:MI
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ATimeBeg")]
+            public string ATimeBeg { get; set; }
+
+            /// <summary>
+            /// ТС причинителя вреда. Дата окончания действия договора YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADateEnd")]
+            public string ADateEnd { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Фамилия, имя и отчество водителя (через пробел)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverName")]
+            public string ADriverName { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Дата рождения водителя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverBithday")]
+            public string ADriverBithday { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Серия и номер удостоверения
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseNum")]
+            public string ADriverLicenseNum { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Категория удостоверения. A1 A B C D BE CE DE IF AM(список через точку с запятой)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseCat")]
+            public string ADriverLicenseCat { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Дата истечения действия удостоверения YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseExp")]
+            public string ADriverLicenseExp { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение причинителя вреда. Адрес проживания водителя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverAddress")]
+            public string ADriverAddress { get; set; }
+
+            /// <summary>
+            /// Телефон причинителя вреда
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverTel")]
+            public string ADriverTel { get; set; }
+
+            /// <summary>
+            /// Адрес электронной почты причинителя вреда
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverEMail")]
+            public string ADriverEMail { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Уникальный идентификатор страхователя(личный номер для физического лица)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BInsuredIdNo")]
+            public string BInsuredIdNo { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Фамилия, имя, отчество физического лица, ИП / наименование юридического лица страхователя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BInsuredName")]
+            public string BInsuredName { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Код района или города регистрации страхователя по справочнику кодов территорий
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BInsuredAddrCode")]
+            public string BInsuredAddrCode { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Адрес страхователя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BInsuredAddress")]
+            public string BInsuredAddress { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Уникальный идентификатор ТС(номер кузова ТС (VIN) или номер шасси прицепа)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BBodyNo")]
+            public string BBodyNo { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Тип ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BVehType")]
+            public string BVehType { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Марка ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BVehMark")]
+            public string BVehMark { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Регистрационный знак ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BVehSign")]
+            public string BVehSign { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Фамилия, имя, отчество физического лица, ИП / наименование юридического лица собственника ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BOwnerName")]
+            public string BOwnerName { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Адрес собственника ТС
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BOwnerAddress")]
+            public string BOwnerAddress { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего.
+            /// Код страховой организации заключившей договор
+            /// 01-   БРУСП Белгосстрах
+            /// 02 – ЗАСО «ТАСК»
+            /// 03 – ЗАСО «Белнефтестрах»
+            /// 07 – ЗАСО «Промтрансинвест»
+            /// 12 – СООО «Белкоопстрах»
+            /// 13 – БРУПЭИС «Белэксимгарант»
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BCompany")]
+            public string BCompany { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Серия и номер договора страхования
+            /// </summary>
+            [XmlAttribute("BPolicyNum")]
+            public string BPolicyNum { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего.
+            /// Тип документа о страховании: 
+            /// S - договор внутреннего страхования,
+            /// К – договор комплексного внутреннего страхования
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BInsDoc")]
+            public string BInsDoc { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Дата начала действия договора YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDateBeg")]
+            public string BDateBeg { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Время начала действия договора в формате HH:MI
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BTimeBeg")]
+            public string BTimeBeg { get; set; }
+
+            /// <summary>
+            /// ТС потерпевшего. Дата окончания действия договора
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDateEnd")]
+            public string BDateEnd { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Фамилия, имя и отчество водителя (через пробел)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverName")]
+            public string BDriverName { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Дата рождения водителя YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverBithday")]
+            public string BDriverBithday { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Серия и номер удостоверения
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseNum")]
+            public string BDriverLicenseNum { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Категория удостоверения.
+            /// A1 A B C D BE CE DE IF AM(список через точку с запятой)
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseCat")]
+            public string BDriverLicenseCat { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Дата истечения действия удостоверения YYYYMMDD
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseExp")]
+            public string BDriverLicenseExp { get; set; }
+
+            /// <summary>
+            /// Водительское удостоверение потерпевшего. Адрес проживания водителя
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverAddress")]
+            public string BDriverAddress { get; set; }
+
+            /// <summary>
+            /// Телефон потерпевшего.
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverTel")]
+            public string BDriverTel { get; set; }
+
+            /// <summary>
+            /// Адрес электронной почты потерпевшего
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverEMail")]
+            public string BDriverEMail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение лицевой стороны техпаспорта транспортного средства причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ATechPassportFront")]
+            public string ATechPassportFront { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение лицевой стороны техпаспорта транспортного средства причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ATechPassportFrontThumbnail")]
+            public string ATechPassportFrontThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение обратной стороны техпаспорта транспортного средства причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ATechPassportBack")]
+            public string ATechPassportBack { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение обратной стороны техпаспорта транспортного средства причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ATechPassportBackThumbnail")]
+            public string ATechPassportBackThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение лицевой стороны водительского удостоверения причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseFront")]
+            public string ADriverLicenseFront { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение лицевой стороны водительского удостоверения причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseFrontThumbnail")]
+            public string ADriverLicenseFrontThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение обратной стороны водительского удостоверения причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseBack")]
+            public string ADriverLicenseBack { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение обратной стороны водительского удостоверения причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADriverLicenseBackThumbnail")]
+            public string ADriverLicenseBackThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение лицевой стороны техпаспорта транспортного средства потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BTechPassportFront")]
+            public string BTechPassportFront { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение лицевой стороны техпаспорта транспортного средства потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BTechPassportFrontThumbnail")]
+            public string BTechPassportFrontThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение обратной стороны техпаспорта транспортного средства потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BTechPassportBack")]
+            public string BTechPassportBack { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение обратной стороны техпаспорта транспортного средства потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BTechPassportBackThumbnail")]
+            public string BTechPassportBackThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение лицевой стороны водительского удостоверения потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseFront")]
+            public string BDriverLicenseFront { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение лицевой стороны водительского удостоверения потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseFrontThumbnail")]
+            public string BDriverLicenseFrontThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение обратной стороны водительского удостоверения потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseBack")]
+            public string BDriverLicenseBack { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение обратной стороны водительского удостоверения потерпевшего BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDriverLicenseBackThumbnail")]
+            public string BDriverLicenseBackThumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook01")]
+            public string GeneralLook01 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook01Thumbnail")]
+            public string GeneralLook01Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook02")]
+            public string GeneralLook02 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook02Thumbnail")]
+            public string GeneralLook02Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook03")]
+            public string GeneralLook03 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook03Thumbnail")]
+            public string GeneralLook03Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook04")]
+            public string GeneralLook04 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение взаимного расположения транспортных средств потерпевшего и причинителя вреда BASE64
+            /// (обязательный параметр)
+            /// </summary>
+            [XmlAttribute("GeneralLook04Thumbnail")]
+            public string GeneralLook04Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage01")]
+            public string Damage01 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage01Thumbnail")]
+            public string Damage01Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage02")]
+            public string Damage02 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage02Thumbnail")]
+            public string Damage02Thumbnail { get; set; }
+
+            /// <summary>
+            /// Фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage03")]
+            public string Damage03 { get; set; }
+
+            /// <summary>
+            /// Сжатое фотоизображение поврежденных деталей BASE64
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("Damage03Thumbnail")]
+            public string Damage03Thumbnail { get; set; }
+
+            /// <summary>
+            /// Описание обстоятельств ДТП
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("DTPCondition")]
+            public string DTPCondition { get; set; }
+
+            /// <summary>
+            /// Описание повреждений транспортного средства причинителя вреда
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("ADamageDesc")]
+            public string ADamageDesc { get; set; }
+
+            /// <summary>
+            /// Описание повреждений транспортного средства пострадавшего
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("BDamageDesc")]
+            public string BDamageDesc { get; set; }
+
+            /// <summary>
+            /// Информация о свидетелях ДТП (ФИО, телефон и т.д.)
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("DTPByStander")]
+            public string DTPByStander { get; set; }
+
+            /// <summary>
+            /// Строка информации:
+            /// «Извещение успешно передано» - при передаче в первую СО;
+            /// «Извещение успешно передано.Ранее извещение было передано в ХХХХХХ DD.MM.YYYY» – при передаче в другую СО
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("InfoLine")]
+            public string InfoLine { get; set; }
+
+            /// <summary>
+            /// Код ошибки
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("ErrorCode")]
+            public string ErrorCode { get; set; }
+
+            /// <summary>
+            /// Строка текста ошибки 
+            /// 6401 «Извещение XXXXXX  не зарегистрировано»
+            /// 6402 «На регистрационный номер XXXXXXX  извещение не оформлялось»
+            /// 6403 «Неверный код СО, обратитесь в ХХХХХХ или ХХХХХХ»
+            /// (необязательный параметр)
+            /// </summary>
+            [XmlAttribute("ErrorLine")]
+            public string ErrorLine { get; set; }
+
+            public ResponceData() { }
+
+            /// <summary>
+            /// Сжатие картинок
+            /// </summary>
+            /// <param name="base64str">Исходная строка картинки в base64</param>
+            /// <returns>Строка сжатой картинки в base64</returns>
+            private static string CompressImage(string base64str)
+            {
+                string sThumbnail = "";
+                if (base64str != null && base64str.Trim() != "")
+                {
+                    const int thumbHeight = 200;
+                    const int thumbWidth = 200;
+                    const int imgHeight = 600;
+                    const int imgWidth = 800;
+                    int newHeight;
+                    int newWidth;
+
+                    using (Stream bStream = new MemoryStream(Convert.FromBase64String(base64str)))
+                    {
+                        Bitmap image = new Bitmap(bStream);
+
+                        if (image.Width > imgWidth)
+                        {
+                            newWidth = imgWidth;
+                            newHeight = (int)(image.Height * ((double)imgWidth / (double)image.Width));
+                        }
+                        else
+                        {
+                            newWidth = image.Width;
+                            newHeight = image.Height;
+                        }
+                        if (newHeight > imgHeight)
+                        {
+                            newHeight = imgHeight;
+                            newWidth = (int)(image.Width * ((double)imgHeight / (double)image.Height));
+                        }
+
+                        Bitmap thumbnail = new Bitmap(thumbWidth, thumbHeight);
+                        Graphics thumbnailGraphic = Graphics.FromImage(thumbnail);
+                        thumbnailGraphic.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        thumbnailGraphic.DrawImage(image, 0, 0, thumbnail.Width, thumbnail.Height);
+
+                        using (Stream nStream = new MemoryStream())
+                        {
+                            thumbnail.Save(nStream, System.Drawing.Imaging.ImageFormat.Jpeg);
+                            byte[] arrBytes = new byte[nStream.Length];
+                            nStream.Position = 0;
+                            nStream.Read(arrBytes, 0, (int)nStream.Length);
+                            sThumbnail = Convert.ToBase64String(arrBytes);
+                            bStream.Close();
+                            nStream.Close();
+                        }
+                    }
+                }
+                else
+                {
+                    sThumbnail = base64str;
+                }
+
+                return sThumbnail;
+            }
+
+            /// <summary>
+            /// Создание сжатых картинок для объекта
+            /// </summary>
+            public void CreateThumbnails()
+            {
+                ATechPassportFrontThumbnail = CompressImage(ATechPassportFront);
+                ATechPassportBackThumbnail = CompressImage(ATechPassportBack);
+                ADriverLicenseFrontThumbnail = CompressImage(ADriverLicenseFront);
+                ADriverLicenseBackThumbnail = CompressImage(ADriverLicenseBack);
+                BTechPassportFrontThumbnail = CompressImage(BTechPassportFront);
+                BTechPassportBackThumbnail = CompressImage(BTechPassportBack);
+                BDriverLicenseFrontThumbnail = CompressImage(BDriverLicenseFront);
+                BDriverLicenseBackThumbnail = CompressImage(BDriverLicenseBack);
+                GeneralLook01Thumbnail = CompressImage(GeneralLook01);
+                GeneralLook02Thumbnail = CompressImage(GeneralLook02);
+                GeneralLook03Thumbnail = CompressImage(GeneralLook03);
+                GeneralLook04Thumbnail = CompressImage(GeneralLook04);
+                Damage01Thumbnail = CompressImage(Damage01);
+                Damage02Thumbnail = CompressImage(Damage02);
+                Damage03Thumbnail = CompressImage(Damage03);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Класс для работы с данными при отправке Viber сообщения
+    /// </summary>
+    public class ViberRequest
+    {
+        /// <summary>
+        /// Класс сообщения в Viber
+        /// </summary>
+        public class ViberMessage
+        {
+            /// <summary>
+            /// Класс контена в сообщении Viber
+            /// </summary>
+            public class MessageContent
+            {
+                /// <summary>
+                /// Текст сообщения. Не более 1000 символов.
+                /// </summary>
+                public string text { get; set; }
+
+                /// <summary>
+                /// Наименование кнопки. Не более 19 символов.
+                /// </summary>
+                public string caption { get; set; }
+
+                /// <summary>
+                /// URL страницы, на которую будет отправлен пользователь при нажатии на кнопку
+                /// </summary>
+                public string action { get; set; }
+
+                /// <summary>
+                /// URL изображения, которое размещено на серверах Клиента
+                /// </summary>
+                public string imageUrl { get; set; }
+
+                public MessageContent() { }
+            }
+
+            /// <summary>
+            /// Подпись для сообщения, которая отображается в мессенджере абонента	
+            /// Все подписи предварительно должны регистрироваться на платформе провайдера Длина имени не более 11 символов.
+            /// </summary>
+            public string subject { get; set; }
+
+            /// <summary>
+            /// Приоритет сообщения. Используется для управления оперативностью доставки сообщения абоненту. 
+            /// Для транзакционных сообщений приоритет должен быть высоким, для рекламы низким.
+            /// low – низкий приоритет. 
+            /// normal – нормальный приоритет 
+            /// high – высокий приоритет. 
+            /// realtime – высочайший приоритет
+            /// </summary>
+            public string priority { get; set; }
+
+            /// <summary>
+            /// Время ожидания доставки Viber сообщения в секундах	
+            /// 30 – 86400.
+            /// </summary>
+            public int validityPeriodSec { get; set; }
+
+            /// <summary>
+            /// Произвольный текстовый комментарий.	 
+            /// </summary>
+            public string comment { get; set; }
+
+            /// <summary>
+            /// Тип отправляемого сообщения. Определяет канал, которые используется для доставки сообщения на мобильный телефон абонента	
+            /// viber – Viber messenger
+            /// </summary>
+            public string type { get; set; }
+
+            /// <summary>
+            /// Тип содержимого сообщения.	
+            /// text – текстовое сообщение 
+            /// image – изображение 
+            /// button – гиперссылка в виде кнопки
+            /// </summary>
+            public string contentType { get; set; }
+
+            /// <summary>
+            /// Контент в сообщении
+            /// </summary>
+            public MessageContent content { get; set; }
+
+            /// <summary>
+            /// Номер телефона абонента, на который отправляется сообщение	
+            /// Положительные целые числа. Номер мобильного телефона абонента в международном формате (в формате E.164)
+            /// </summary>
+            public string address { get; set; }
+
+            /// <summary>
+            /// Текст СМС сообщения
+            /// </summary>
+            public string smsText { get; set; }
+
+            /// <summary>
+            /// Адрес отправителя СМС сообщения
+            /// Адрес отправителя должен быть согласован на СМС в личном кабинете, длина имени не более 11 латинский символов или цифр.
+            /// </summary>
+            public string smsSrcAddress { get; set; }
+
+            /// <summary>
+            /// Время ожидания доставки СМС сообщения в секундах от 60 до 86400. 
+            /// Если параметр не указан, то время жизни сообщения будет выставлено по-умолчанию СМС-центром оператора.
+            /// </summary>
+            public int? smsValidityPeriodSec { get; set; } //Нужен NULL или 0 (мб в String?)
+
+            public ViberMessage() { content = new MessageContent(); }
+        }
+        /// <summary>
+        /// Запрос
+        /// </summary>
+        public class RequestData
+        {
+            /// <summary>
+            /// Признак переотправки сообщения, по умолчанию (если параметр не передаётся) - переотправка выключена	
+            /// true – переотправка включена false– переотправка выключена
+            /// </summary>
+            public string resendSms { get; set; }
+
+            public List<ViberMessage> messages { get; set; }
+
+            public RequestData(XmlDocument xDoc)
+            {
+                messages = new List<ViberMessage>();
+                XmlNode node = xDoc.SelectSingleNode("/root/method");
+                if (node.Attributes != null && node.Attributes["resendSms"] != null) //необязательное поле
+                {
+                    this.resendSms = node.Attributes["resendSms"].Value;
+                }
+                foreach (XmlNode xn in xDoc.SelectNodes("/root/method/messages"))
+                {
+                    ViberMessage mess = new ViberMessage();
+
+                    if (this.resendSms == "true")
+                    {
+                        mess.smsText = xn.Attributes["smsText"].Value;
+                        mess.smsSrcAddress = xn.Attributes["smsSrcAddress"].Value;
+                        mess.smsValidityPeriodSec = Convert.ToInt32(xn.Attributes["smsValidityPeriodSec"].Value);
+                    }
+                    mess.subject = xn.Attributes["subject"].Value;
+                    mess.priority = xn.Attributes["priority"].Value;
+                    mess.validityPeriodSec = Convert.ToInt32(xn.Attributes["validityPeriodSec"].Value);
+
+                    if (xn.Attributes != null && xn.Attributes["comment"] != null) //необязательное поле
+                    {
+                        mess.comment = xn.Attributes["comment"].Value;
+                    }
+                    mess.type = xn.Attributes["type"].Value;
+                    mess.contentType = xn.Attributes["contentType"].Value;
+                    node = xn.SelectSingleNode("content");
+                    if (node.Attributes != null && node.Attributes["text"] != null)//необязательное поле
+                    {
+                        mess.content.text = node.Attributes["text"].Value;
+                    }
+                    if (node.Attributes != null && node.Attributes["caption"] != null)//необязательное поле
+                    {
+                        mess.content.caption = node.Attributes["caption"].Value;
+                    }
+                    if (node.Attributes != null && node.Attributes["action"] != null)//необязательное поле
+                    {
+                        mess.content.action = node.Attributes["action"].Value;
+                    }
+                    if (node.Attributes != null && node.Attributes["imageUrl"] != null)//необязательное поле
+                    {
+                        mess.content.imageUrl = node.Attributes["imageUrl"].Value;
+                    }
+                    mess.address = xn.Attributes["address"].Value;
+
+                    messages.Add(mess);
+                }
+            }
+
+            public RequestData() { }
+        }
+
+        /// <summary>
+        /// Результат
+        /// </summary>
+        [XmlRoot("root")]
+        public class Result
+        {
+            [XmlElement("responce")]
+            public ResponceData responceData { get; set; }
+
+            public Result(ResponceData responceData)
+            {
+                this.responceData = responceData;
+            }
+
+            public Result() { }
+        }
+
+        /// <summary>
+        /// Ответ
+        /// </summary>        
+        public class ResponceData
+        {
+            public class responceMessage
+            {
+                /// <summary>
+                /// Поле возвращается только в случае когда код ответа провайдера для сообщения равен “ok”. 
+                /// На стороне клиента providerId должно сохраняться для последующего запроса статуса сообщения.	
+                /// Положительные целые числа
+                /// </summary>
+                [XmlAttribute("providerId")]
+                public string providerId { get; set; }
+
+                /// <summary>
+                /// Код ответа провайдера для конкретного сообщения
+                /// ok	исходящее сообщение успешно принято на отправку
+                /// error-system системная ошибка
+                /// error-instant-message-client-id-not-unique клиентский идентификатор сообщения не уникален в рамках всего взаимодействия между клиентом и провайдером.
+                /// error-subject-format неправильный формат подписи
+                /// error-subject-unknown указанная подпись не разрешена клиенту в конфигурации платформы провайдера
+                /// error-subject-not-specified подпись не указана
+                /// error-address-format неправильный формат номера абонента
+                /// error-address-unknown отправка на номерную емкость, к которой относится номер абонента не разрешена клиенту в конфигурации платформы провайдера
+                /// error-address-not-specified номер абонента не указан
+                /// error-priority-format неправильный формат значения приоритета
+                /// error-comment-format неправильный формат значения комментария
+                /// error-instant-message-type-format неправильный формат типа сообщения
+                /// error-instant-message-type-not-specified неправильный формат типа содержимого сообщения
+                /// error-content-type-format неправильный формат содержимого сообщения
+                /// error-content-not-specified содержимое сообщения не указано
+                /// error-validity-period-seconds-format неправильно указано значение времени ожидания доставки
+                /// error-instant-message-provider-id-format неправильный формат провайдерского идентификатора
+                /// error-instant-message-provider-id-duplicate провайдерский идентификатор исходящего сообщения неуникален в рамках запроса проверки статуса
+                /// error-instant-message-provider-id-unknown исходящее сообщение с данным провайдерским идентификатором не найдено на платформе провайдера
+                /// error-resend-sms-error указаны поля для переотправки смс но переотправка не включена
+                /// error-resend-sms-validity-period-error неверное время жизни для смс
+                /// </summary>
+                [XmlAttribute("code")]
+                public string code { get; set; }
+
+                public responceMessage() { }
+
+                public responceMessage(string code, string providerID = null)
+                {
+                    this.providerId = providerId;
+                    this.code = code;
+                }
+            }
+            /// <summary>
+            /// Статус ответа провайдера на запрос send
+            /// ok Запрос был успешно обработан
+            /// error-syntax ошибка синтаксиса
+            /// error-auth ошибка аутентификации
+            /// error-system системная ошибка
+            /// error-account-locked аккаунт клиента заблокирован
+            /// error-instant-message-typeformat неправильный формат типа исходящего сообщения
+            /// error-instant-message-content-type-format неправильный формат типа содержимого сообщения
+            /// error-instant-message-content-image-id-format неправильный формат идентификатора изображения для содержимого сообщения
+            /// </summary>
+            [XmlAttribute("status")]
+            public string status { get; set; }
+
+            /// <summary>
+            /// Список ответов на сообщения
+            /// </summary>
+            [XmlElement("messages")]
+            public List<responceMessage> messages { get; set; }
+            public ResponceData() { }
+        }
+    }
+
+    /// <summary>
+    /// Класс для работы с данными при проверке статусов Viber сообщений
+    /// </summary>
+    public class ViberStatus
+    {
+        /// <summary>
+        /// Запрос
+        /// </summary>
+        public class RequestData
+        {
+            [XmlElement("messages")]
+            public List<string> messages { get; set; }
+
+            public RequestData(XmlDocument xDoc)
+            {
+                messages = new List<string>();
+
+                foreach (XmlNode xn in xDoc.SelectNodes("/root/method/messages"))
+                {
+                    string mess = xn.Attributes["providerId"].Value;
+                    messages.Add(mess);
+                }
+            }
+
+            public RequestData() { }
+        }
+
+        /// <summary>
+        /// Результат
+        /// </summary>
+        [XmlRoot("root")]
+        public class Result
+        {
+            [XmlElement("responce")]
+            public ResponceData responceData { get; set; }
+
+            public Result(ResponceData responceData)
+            {
+                this.responceData = responceData;
+            }
+
+            public Result() { }
+        }
+
+        /// <summary>
+        /// Ответ
+        /// </summary>        
+        public class ResponceData
+        {
+            public class responceMessage
+            {
+                /// <summary>
+                /// Информация о СМС сообщении
+                /// </summary>
+                public class smsState
+                {
+                    /// <summary>
+                    /// Идентификатор SMS сообщения
+                    /// </summary>
+                    [XmlAttribute("id")]
+                    public string id { get; set; }
+
+                    /// <summary>
+                    /// Статус SMS сообщения
+                    /// </summary>
+                    [XmlAttribute("state")]
+                    public string state { get; set; }
+                    public smsState() { }
+                }
+                /// <summary>
+                /// Идентификатор Viber сообщения
+                /// </summary>
+                [XmlAttribute("providerId")]
+                public string providerId { get; set; }
+
+                /// <summary>
+                /// Результат обработки запроса для конкретного сообщения с провайдеским идентификатором
+                /// ok Запрос был успешно обработан
+                /// error-syntax ошибка синтаксиса
+                /// error-auth ошибка аутентификации
+                /// error-system системная ошибка
+                /// error-account-locked аккаунт клиента заблокирован
+                /// error-instant-message-typeformat неправильный формат типа исходящего сообщения
+                /// error-instant-message-content-type-format неправильный формат типа содержимого сообщения
+                /// error-instant-message-content-image-id-format неправильный формат идентификатора изображения для содержимого сообщения
+                /// </summary>
+                [XmlAttribute("code")]
+                public string code { get; set; }
+
+                /// <summary>
+                /// Код статуса доставки Viber сообщения.
+                /// enqueued – сообщение находится в очереди на отправку. 
+                /// sent – сообщение отправлено абоненту 
+                /// delivered – сообщение доставлено абоненту. 
+                /// read – сообщение просмотрено абонентом. 
+                /// visited абонент перешел по ссылке в сообщении. 
+                /// undelivered – сообщение отправлено, но не доставлено абоненту. 
+                /// failed – сообщение не было отправлено в результат сбоя. 
+                /// cancelled –отправка сообщения отменена. 
+                /// vp_expired – сообщение просрочено, финальный статус не получен в рамках заданного validity period
+                /// </summary>
+                [XmlAttribute("status")]
+                public string status { get; set; }
+
+                /// <summary>
+                /// Дата и время получения статуса по UTC
+                /// </summary>
+                [XmlAttribute("statusAt")]
+                public DateTime statusAt { get; set; }
+
+                /// <summary>
+                /// Причина, по которой сообщение не было доставлено абоненту (status=undelivered)
+                /// user-blocked – абонент заблокирован 
+                /// not-viber-user – абонент не является пользователем Viber.
+                /// </summary>
+                [XmlAttribute("error")]
+                public string error { get; set; }
+
+                /// <summary>
+                /// Данные о СМС сообщениях, если они были
+                /// </summary>
+                [XmlElement("smsStates")]
+                public List<smsState> smsStates { get; set; }
+                public responceMessage() { }
+            }
+            /// <summary>
+            /// Статус ответа провайдера на запрос send
+            /// ok Запрос был успешно обработан
+            /// error-syntax ошибка синтаксиса
+            /// error-auth ошибка аутентификации
+            /// error-system системная ошибка
+            /// error-account-locked аккаунт клиента заблокирован
+            /// error-instant-message-typeformat неправильный формат типа исходящего сообщения
+            /// error-instant-message-content-type-format неправильный формат типа содержимого сообщения
+            /// error-instant-message-content-image-id-format неправильный формат идентификатора изображения для содержимого сообщения
+            /// </summary>
+            [XmlAttribute("status")]
+            public string status { get; set; }
+
+            /// <summary>
+            /// Список ответов на сообщения
+            /// </summary>
+            [XmlElement("messages")]
+            public List<responceMessage> messages { get; set; }
+            public ResponceData() { }
+        }
+    }
+
+    /// <summary>
+    /// Класс для работы с данными при отправке SMS сообщения
+    /// </summary>
+    public class SmsRequest
+    {
+        /// <summary>
+        /// 
+        /// </summary>
+        [XmlRoot("root")]
+        public class Result
+        {
+            [XmlElement("responce")]
+            public ResponceData responceData { get; set; }
+
+            public Result(ResponceData responceData)
+            {
+                this.responceData = responceData;
+            }
+
+            public Result() { }
+        }
+
+        /// <summary>
+        /// Ответ
+        /// </summary>        
+        public class ResponceData
+        {
+            /// <summary>
+            /// создал класс для сериализации в XML
+            /// </summary>
+            public class message
+            {
+                /// <summary>
+                /// ID SMS сообщения
+                /// </summary>
+                [XmlAttribute("messageId")]
+                public string messageID { get; set; }
+
+                public message() { }
+
+                public message(string mes)
+                {
+                    this.messageID = mes;
+                }
+            }
+            /// <summary>
+            /// Список идентификаторв на сообщение
+            /// </summary>
+            [XmlElement("messages")]
+            public List<message> messages { get; set; }
+            public ResponceData() { }
+
+            public ResponceData(List<string> list)
+            {
+                this.messages = new List<message>();
+
+                foreach (string element in list)
+                {
+                    this.messages.Add(new message(element));
+                }
+
+            }
+        }
+    }
+
+    /// <summary>
+    /// Класс для даботы с данными при проверке статусов SMS сообщений
+    /// </summary>
+    public class SmsStatus
+    {
+        /// <summary>
+        /// Результат
+        /// </summary>
+        [XmlRoot("root")]
+        public class Result
+        {
+            [XmlElement("responce")]
+            public ResponceData responceData { get; set; }
+
+            public Result(ResponceData responceData)
+            {
+                this.responceData = responceData;
+            }
+
+            public XmlDocument GetXML()
+            {
+                XmlDocument doc = new XmlDocument();
+                XmlElement root = (XmlElement)doc.AppendChild(doc.CreateElement(("root")));
+                XmlElement responce = doc.CreateElement("responce");
+                responce.SetAttribute("State", this.responceData.State.ToString());
+                responce.SetAttribute("StateDescription", this.responceData.StateDescription);
+
+                if (this.responceData.TimeStampUtc != null)
+                    responce.SetAttribute("TimeStampUtc", ((DateTime)this.responceData.TimeStampUtc).ToString("s"));
+
+                if (this.responceData.CreationDateUtc != null)
+                    responce.SetAttribute("CreationDateUtc", ((DateTime)this.responceData.CreationDateUtc).ToString("s"));
+
+                if (this.responceData.SubmittedDateUtc != null)
+                    responce.SetAttribute("SubmittedDateUtc", ((DateTime)this.responceData.SubmittedDateUtc).ToString("s"));
+
+                if (this.responceData.ReportedDateUtc != null)
+                    responce.SetAttribute("ReportedDateUtc", ((DateTime)this.responceData.ReportedDateUtc).ToString("s"));
+
+                if(this.responceData.Price != null)
+                    responce.SetAttribute("Price", this.responceData.Price.ToString());
+
+                root.AppendChild(responce);
+                return doc;
+            }
+
+            public Result() { }
+        }
+
+        /// <summary>
+        /// Ответ
+        /// </summary>
+        public class ResponceData
+        {
+            /// <summary>
+            /// Статус сообщения
+            /// -1	Отправлено (передано в мобильную сеть)
+            /// -2	В очереди
+            /// 47	Удалено
+            /// -98	Остановлено
+            /// 0	Доставлено абоненту
+            /// 10	Неверно введен адрес отправителя
+            /// 11	Неверно введен адрес получателя
+            /// 41	Недопустимый адрес получателя
+            /// 42	Отклонено смс центром
+            /// 46	Просрочено(истек срок жизни сообщения)
+            /// 48	Отклонено Платформой
+            /// 69	Отклонено
+            /// 99	Неизвестный
+            /// 255	По запросу возвращается этот статус, если сообщения еще не успело попасть в БД, либо сообщение старше 48 часов.
+            /// </summary>
+            [XmlAttribute("State")]
+            public int State { get; set; }
+
+            /// <summary>
+            /// Дата и время получения отчета (Гринвич GMT00:00) (возможность быть null добавлено для подстраховки)
+            /// </summary>
+            [XmlAttribute("TimeStampUtc")]
+            public DateTime? TimeStampUtc { get; set; }
+
+            /// <summary>
+            /// Описание статуса
+            /// </summary>
+            [XmlAttribute("StateDescription")]
+            public string StateDescription { get; set; }
+
+            /// <summary>
+            /// Дата создания (возможен null)
+            /// </summary>
+            [XmlAttribute("CreationDateUtc")]
+            public DateTime? CreationDateUtc { get; set; }
+
+            /// <summary>
+            /// Дата отправки (возможен null)
+            /// </summary>
+            [XmlAttribute("SubmittedDateUtc")]
+            public DateTime? SubmittedDateUtc { get; set; }
+
+            /// <summary>
+            /// Дата доставки (возможен null)
+            /// </summary>
+            [XmlAttribute("ReportedDateUtc")]
+            public DateTime? ReportedDateUtc { get; set; }
+
+            /// <summary>
+            /// Цена за сообщение (возможен null)
+            /// </summary>
+            [XmlAttribute("Price")]
+            public double? Price { get; set; }
+
+            public ResponceData() { }
+        }
+    }
+
+    public class Request
+    {
+        const int DefaultTimeout = 1; // 3 сек
+        public HttpListener Listener;
+        public bool IsStarted { get; set; }
+        private event delReceiveWebRequest ReceiveWebRequest;
+        private string urlbase;
+        private static EventLog _eventLog;
+
+
+        private static string DownloadString(string url, bool usingSecurityProtocol, Dictionary<string,string> headers = null)
+        {
+            if (usingSecurityProtocol)
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | (SecurityProtocolType)768 | (SecurityProtocolType)3072 | SecurityProtocolType.Tls;
+
+            WebClient client = new WebClient();
+            // Добавим заголовки если пришли
+            if (headers != null)
+            {
+                foreach (var item in headers) {
+                    client.Headers.Add(item.Key, item.Value);
+                }                                
+            }            
+            return client.DownloadString(url);
+        }
+
+        protected void WebRequestCallback(IAsyncResult result)
+        {
+            if (this.Listener == null)
+                return;
+
+            HttpListenerContext context = this.Listener.EndGetContext(result);
+            this.Listener.BeginGetContext(new AsyncCallback(WebRequestCallback), this.Listener);
+            if (this.ReceiveWebRequest != null)
+                this.ReceiveWebRequest(context);
+            this.ProcessRequest(context);
+        }
+
+        private void ConfigParse()
+        {
+            //получение основных данных сервиса
+            XmlDocument xdoc = new XmlDocument();
+            string configPath = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetAssembly(typeof(PSWebRequestSrv.Request)).Location), "PSWebRequestService.xml");
+            xdoc.Load(configPath);
+            XmlNode xn = xdoc.SelectSingleNode("/root/WebRequestService");
+
+            if (xn.Attributes["urlbase"] != null)
+                urlbase = xn.Attributes["urlbase"].Value;
+        }
+
+        public bool Start(EventLog events_log)
+        {
+            if (this.IsStarted)
+                throw new Exception("Сервер уже запущен");
+
+            ConfigParse();
+            _eventLog = events_log;
+
+            if (this.Listener == null)
+            {
+                this.Listener = new HttpListener();
+            }
+
+            this.Listener.Prefixes.Add(urlbase);
+            this.IsStarted = true;
+            this.Listener.Start();
+
+            IAsyncResult result = this.Listener.BeginGetContext(new AsyncCallback(WebRequestCallback), this.Listener);
+
+            return true;
+        }
+
+        public Request()
+        {
+        }
+
+        protected virtual void ProcessRequest(HttpListenerContext context)
+        {            
+            string reqSrt = "";
+            try
+            {
+                HttpListenerRequest request = context.Request;
+                HttpListenerResponse response = context.Response;
+                byte[] buff = new byte[request.ContentLength64];
+                request.InputStream.Read(buff, 0, (int)request.ContentLength64);
+                reqSrt = Encoding.UTF8.GetString(buff);
+
+                XmlDocument xmlDoc = new XmlDocument();
+                xmlDoc.LoadXml(reqSrt);
+                string methodName = xmlDoc.SelectSingleNode("/root/method").Attributes["methodName"].Value;
+                string date = "";
+                string respStr = string.Empty;
+                string urlForSend = string.Empty;
+                switch (methodName)
+                {
+                    case "DownloadDailyCurrencyRates":
+                        date = xmlDoc.SelectSingleNode("/root/method").Attributes["onDate"].Value;
+                        respStr = DownloadDailyCurrencyRates(date);
+                        break;
+                    case "DownloadMonthlyCurrencyRates":
+                        date = xmlDoc.SelectSingleNode("/root/method").Attributes["onDate"].Value;
+                        respStr = DownloadMonthlyCurrencyRates(date);
+                        break;
+                    case "SendSMSMessage":
+                        urlForSend = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                        respStr = SendSMSMessage(urlForSend);
+                        break;
+                    case "CheckDiscountCard":
+                        urlForSend = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                        string token = xmlDoc.SelectSingleNode("/root/method").Attributes["headerValue"].Value;
+                        string tokenHeaderName = xmlDoc.SelectSingleNode("/root/method").Attributes["headerName"].Value;                        
+                        Dictionary<string,string> headers = new Dictionary<string,string>();
+                        headers.Add(tokenHeaderName, token);
+                        respStr = CheckDiscountCard(urlForSend, headers);
+                        break;
+                    case "AssistanceContractUnload":
+                        respStr = AssistanceContractUnload(xmlDoc);                        
+                        break;
+                    case "ImportAssistanceLosses":
+                        respStr = ImportAssistanceLosses(xmlDoc);
+                        break;
+                    case "SetAssistanceWebHook":
+                        respStr = SetAssistanceWebHook(xmlDoc);                        
+                        break;
+                    case "BTIBCDNoticeGet":
+                        respStr = BTIBCDNoticeGet(xmlDoc);
+                        break;
+                    case "SendViberMessageDevino":
+                        respStr = SendViberMessageDevino(xmlDoc);
+                        break;
+                    case "StatusViberMessageDevino":
+                        respStr = StatusViberMessageDevino(xmlDoc);
+                        break;
+                    case "SendSMSMessageDevino":
+                        respStr = SendSMSMessageDevino(xmlDoc);
+                        break;
+                    case "StatusSMSMessageDevino":
+                        respStr = StatusSMSMessageDevino(xmlDoc);
+                        break;
+                    case "WebInsuredInformERIPPay":
+                        respStr = WebInsuredInformERIPPay(xmlDoc);
+                        break;
+                }
+
+                Stream output = response.OutputStream;
+                byte[] respBytes = Encoding.UTF8.GetBytes(respStr);
+                response.ContentLength64 = respBytes.Length;
+                output.Write(respBytes, 0, respBytes.Length);
+                output.Close();
+            }
+            catch (Exception ex)
+            {
+                _eventLog.WriteEntry("Строка запроса:" + reqSrt + "\nОшибка в процессе обработки запроса: \"" + ex.ToString());
+            }
+        }
+
+        private string SendSMSMessage(String url)
+        {
+            RequestResult requestResult = new RequestResult("SendSMSMessage");
+            System.Net.HttpWebRequest webRequest;
+            try
+            {
+                if (!String.IsNullOrEmpty(url))
+                {
+                    ServicePointManager.ServerCertificateValidationCallback = (a, b, c, d) => true;
+                    webRequest = (HttpWebRequest)System.Net.WebRequest.Create(url);
+                    Task<HttpWebResponse> responseTask = Task.Factory.FromAsync(webRequest.BeginGetResponse, ar => (HttpWebResponse)webRequest.EndGetResponse(ar), null);
+                    responseTask.Wait(DefaultTimeout);
+                    requestResult.CreateResult(responseTask.Result);
+                    webRequest.Abort();
+                }
+            }
+            catch (Exception e)
+            {
+                _eventLog.WriteEntry("Ошибка при отправке СМС сообщения\n" + e.ToString());
+                requestResult.CreateResult(e.InnerException.Message);
+            }
+            return requestResult.GetXml().OuterXml;
+        }      
+
+        private static string DownloadDailyCurrencyRates(string onDate)
+        {
+            string result = string.Empty;
+            RequestResult requestResult = new RequestResult("DownloadDailyCurrencyRates");
+            try
+            {
+                string url = "https://www.nbrb.by/Services/XmlExRates.aspx?ondate=" +
+                        onDate;
+                result = DownloadString(url, true);
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (Exception ex) {
+                requestResult.CreateResult(ex.Message);
+            }
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml(result);
+            xdox = requestResult.AddResultToXML(xdox);
+            return xdox.OuterXml;
+        }
+
+        private static string DownloadMonthlyCurrencyRates(string onDate)
+        {
+            string result = string.Empty;
+            RequestResult requestResult = new RequestResult("DownloadMonthlyCurrencyRates");
+            try
+            {
+                string url = "https://www.nbrb.by/Services/XmlExRates.aspx?ondate=" +
+                        onDate + "&period=1";
+                result = DownloadString(url, true);
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (Exception ex) {
+                requestResult.CreateResult(ex.Message);
+            }
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml(result);
+            xdox = requestResult.AddResultToXML(xdox);
+            return xdox.OuterXml;
+        }
+
+        private static string CheckDiscountCard(string url, Dictionary<string,string> token)
+        {            
+            string result = string.Empty;
+            RequestResult requestResult = new RequestResult("CheckDiscountCard");
+            try
+            {                
+                result = DownloadString(url, false, token);
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                XmlDocument resDocx = (XmlDocument)JsonConvert.DeserializeXmlNode(result);
+                xdox.LoadXml("<root><responce>" + resDocx.OuterXml + "</responce></root>");
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+            return xdox.OuterXml;
+        }
+
+        private static string AssistanceContractUnload(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("AssistanceContractUnload");
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            string result = string.Empty;
+            try
+            {
+                // Определим тип ассистанса
+                int assistanceID = -1;
+                if (int.TryParse(xmlDoc.SelectSingleNode("/root/method").Attributes["assistanceID"].Value, out assistanceID))
+                {
+                    string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                    switch (assistanceID)
+                    {
+                        case 7: //Balt Assistance (ПТИ)
+
+                            int unloadingType = -1; //an10010
+                            if (int.TryParse(xmlDoc.SelectSingleNode("/root").Attributes["unloadingType"].Value, out unloadingType))
+                            {
+                                Dictionary<string, string> data = new Dictionary<string, string>();                                 
+                                switch (unloadingType)
+                                {
+                                    case 1: // Заключение договора
+                                        Assistance.Balt.UploadBardero.RequestData reqDataUpload = new Assistance.Balt.UploadBardero.RequestData(xmlDoc);
+                                        data.Add("key", reqDataUpload.key);
+                                        data.Add("data", JsonConvert.SerializeObject(reqDataUpload.data));                                        
+                                        break;
+
+                                    case 2: // Редактирование договора
+                                        Assistance.Balt.UpdateBardero.RequestData reqDataUpdate = new Assistance.Balt.UploadBardero.RequestData(xmlDoc);
+                                        data.Add("key", reqDataUpdate.key);
+                                        data.Add("data", JsonConvert.SerializeObject(reqDataUpdate.data));                                        
+                                        break;
+
+                                    case 3: // Расторжение договора для конкретного застрахованного лица
+                                        Assistance.Balt.DeleteInsuredPerson.RequestData reqDataDeleteInsured = new Assistance.Balt.DeleteInsuredPerson.RequestData(xmlDoc);
+                                        data.Add("key", reqDataDeleteInsured.key);
+                                        data.Add("data", JsonConvert.SerializeObject(reqDataDeleteInsured.data));
+                                        break;
+                                    case 4: // Расторжение договора
+                                        Assistance.Balt.DeleteBardero.RequestData reqDataDelete = new Assistance.Balt.DeleteBardero.RequestData(xmlDoc);
+                                        data.Add("key", reqDataDelete.key);
+                                        data.Add("data", JsonConvert.SerializeObject(reqDataDelete.data));   
+                                        break;
+                                }
+
+                                if (data.Count != 0)
+                                {
+                                    string postResult = SendKeyValuePostRequest(data, url);
+                                    Assistance.Balt.ResponceData responceData = JsonConvert.DeserializeObject<Assistance.Balt.ResponceData>(postResult.Replace("<br>", ""));
+                                    responceData.InitStatuses();
+
+                                    xdox = responceData.GetXml();
+                                    requestResult.Message = "OK";
+                                    requestResult.ResultCode = 1;
+                                }
+                                else
+                                {
+                                    requestResult.CreateResult("Для данного типа выгрузки в ассистанс требуется доработка");
+                                }
+                            }
+                            else
+                            {
+                                requestResult.CreateResult("Не удалось определить тип выгрузки в ассистанс");
+                            }
+
+                            break;
+                        default:
+                            requestResult.CreateResult("Для данного ассистанса требуется доработка");
+                            break;
+                    }
+                }
+                else
+                {
+                    requestResult.CreateResult("Не удалось определить ассистанс");
+                }
+
+            }
+            catch (Exception ex)
+            {                
+                requestResult.CreateResult(ex.Message);
+            }
+
+            xdox = requestResult.AddResultToXML(xdox);
+            return xdox.OuterXml;
+        }
+
+        private static string ImportAssistanceLosses(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("ImportAssistanceLosses");
+            XmlDocument xdox = new XmlDocument();
+            //xdox.LoadXml("<root/>");
+            string result = string.Empty;
+            try
+            {
+                // Определим тип ассистанса
+                int assistanceID = -1;
+                if (int.TryParse(xmlDoc.SelectSingleNode("/root/method").Attributes["assistanceID"].Value, out assistanceID))
+                {
+                    string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                    Dictionary<string, string> data = new Dictionary<string, string>();
+                    switch (assistanceID)
+                    {                         
+                        case 7: //Balt Assistance (ПТИ)
+                            Assistance.Balt.DownloadLosses.RequestData reqDataDownload= new Assistance.Balt.DownloadLosses.RequestData(xmlDoc);
+                            data.Add("key", reqDataDownload.key);
+                            data.Add("dateBeg", reqDataDownload.dateBeg);
+                            data.Add("dateEnd", reqDataDownload.dateEnd);
+                            string postResult = SendKeyValuePostRequest(data, url);                            
+                            List<Assistance.Balt.DownloadLosses.ResponceData> responceData = JsonConvert.DeserializeObject<List<Assistance.Balt.DownloadLosses.ResponceData>>(postResult);
+                            Assistance.Balt.DownloadLosses.ResponceDataList responceDataList = new Assistance.Balt.DownloadLosses.ResponceDataList(responceData, assistanceID, 3);                            
+                            xdox.LoadXml(ObjectToXml(responceDataList));
+                            requestResult.Message = "OK";
+                            requestResult.ResultCode = 1;
+                            break;
+                            
+                        default:
+                            requestResult.CreateResult("Для данного ассистанса требуется доработка");
+                            break;
+                    }
+                }
+                else
+                {
+                    requestResult.CreateResult("Не удалось определить ассистанс");
+                }
+
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            xdox = requestResult.AddResultToXML(xdox);
+
+            return xdox.OuterXml;
+        }
+
+        private static string SetAssistanceWebHook(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("SetAssistanceWebHook");
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            string result = string.Empty;
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                Dictionary<string, string> data = new Dictionary<string, string>();
+                Assistance.Balt.SetWebHook.RequestData reqData = new Assistance.Balt.SetWebHook.RequestData(xmlDoc);                
+                data.Add("key", reqData.key);
+                data.Add("fileNotificationChoice", reqData.GetFileNotificationChoice());
+                data.Add("link", reqData.link);
+                string postResult = SendKeyValuePostRequest(data, url);                
+                Assistance.Balt.ResponceData responceData = JsonConvert.DeserializeObject<Assistance.Balt.ResponceData>(postResult.Replace("<br>", ""));
+                responceData.InitStatuses();
+
+                xdox = responceData.GetXml();
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            xdox = requestResult.AddResultToXML(xdox);
+
+            return xdox.OuterXml;
+        }
+
+        private static string BTIBCDNoticeGet(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("BTIBCDNoticeGet");                    
+            string result = string.Empty;
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                BTIBNotice.RequestData requestDataDownload = new BTIBNotice.RequestData(xmlDoc);
+                result = SendPostRequest(JsonConvert.SerializeObject(requestDataDownload), url, Encoding.UTF8).ResultData;
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                try
+                {
+                    BTIBNotice.ResponceData responce = JsonConvert.DeserializeObject<BTIBNotice.ResponceData>(result);
+                    responce.CreateThumbnails();
+                    BTIBNotice.Result res = new BTIBNotice.Result(responce);
+                    xdox.LoadXml(ObjectToXml(res));
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                catch (Exception ex)
+                {
+                    requestResult.CreateResult(ex.Message);
+                }
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+            return xdox.OuterXml;
+        }
+
+        private static string SendViberMessageDevino(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("SendViberMessageDevino");
+            string result = string.Empty;
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                string token = xmlDoc.SelectSingleNode("/root/method").Attributes["headerValue"].Value;
+                string tokenHeaderName = xmlDoc.SelectSingleNode("/root/method").Attributes["headerName"].Value;
+                Dictionary<string, string> headers = new Dictionary<string, string>();
+                headers.Add(tokenHeaderName, token);
+                ViberRequest.RequestData requestDataDownload = new ViberRequest.RequestData(xmlDoc);
+                result = SendPostRequest(JsonConvert.SerializeObject(requestDataDownload, new JsonSerializerSettings() { NullValueHandling = NullValueHandling.Ignore }), 
+                    url, Encoding.UTF8, false, headers).ResultData;
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (WebException ex)
+            {
+                if (ex.Response != null)
+                {
+                    var contentStream = ex.Response.GetResponseStream();
+                    if (contentStream != null)
+                    {
+                        using (var reader = new StreamReader(contentStream))
+                        {
+                            requestResult.CreateResult(JsonConvert.DeserializeObject<RequestResult.ErrorResult>(reader.ReadToEnd()).Desc);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                try
+                {
+                    ViberRequest.ResponceData responce = JsonConvert.DeserializeObject<ViberRequest.ResponceData>(result);
+
+                    ViberRequest.Result res = new ViberRequest.Result(responce);
+                    xdox.LoadXml(ObjectToXml(res));
+
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                catch (Exception ex)
+                {
+                    requestResult.CreateResult(ex.Message);
+                }
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+
+            //xdox.Save("test.xml");
+
+            return xdox.OuterXml;
+        }
+
+        private static string StatusViberMessageDevino(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("StatusViberMessageDevino");
+            string result = string.Empty;
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                string token = xmlDoc.SelectSingleNode("/root/method").Attributes["headerValue"].Value;
+                string tokenHeaderName = xmlDoc.SelectSingleNode("/root/method").Attributes["headerName"].Value;
+                Dictionary<string, string> headers = new Dictionary<string, string>();
+                headers.Add(tokenHeaderName, token);
+                ViberStatus.RequestData requestDataDownload = new ViberStatus.RequestData(xmlDoc);
+                result = SendPostRequest(JsonConvert.SerializeObject(requestDataDownload, new JsonSerializerSettings() { NullValueHandling = NullValueHandling.Ignore }), 
+                    url, Encoding.UTF8, false, headers).ResultData;
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (WebException ex)
+            {
+                if (ex.Response != null)
+                {
+                    var contentStream = ex.Response.GetResponseStream();
+                    if (contentStream != null)
+                    {
+                        using (var reader = new StreamReader(contentStream))
+                        {
+                            requestResult.CreateResult(JsonConvert.DeserializeObject<RequestResult.ErrorResult>(reader.ReadToEnd()).Desc);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                try
+                {
+                    ViberStatus.ResponceData responce = JsonConvert.DeserializeObject<ViberStatus.ResponceData>(result);
+
+                    ViberStatus.Result res = new ViberStatus.Result(responce);
+                    xdox.LoadXml(ObjectToXml(res));
+
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                catch (Exception ex)
+                {
+                    requestResult.CreateResult(ex.Message);
+                }
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+
+            //xdox.Save("test.xml");
+
+            return xdox.OuterXml;
+        }
+
+        private static string SendSMSMessageDevino(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("SendSMSMessageDevino");
+            string result = string.Empty;
+
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+                var queryString = HttpUtility.ParseQueryString(string.Empty);
+                foreach (XmlNode xn in xmlDoc.SelectNodes("/root/method/messages"))
+                {
+                    queryString["login"] = xn.Attributes["login"].Value;
+                    queryString["password"] = xn.Attributes["password"].Value;
+                    queryString["sourceAddress"] = xn.Attributes["sourceAddress"].Value;
+                    queryString["destinationAddress"] = xn.Attributes["destinationAddress"].Value;
+                    queryString["data"] = xn.Attributes["data"].Value;
+                    if (xn.Attributes != null && xn.Attributes["validity"] != null)//необязательное поле
+                    {
+                        queryString["validity"] = xn.Attributes["validity"].Value;
+                    }
+                    if (xn.Attributes != null && xn.Attributes["sendDate"] != null)//необязательное поле. Без него работает. 
+                    {                                                              //На момент разработки (24.01.2020) при передаче параметры вылетает ошибка (10 - Переполнение очереди)
+                        queryString["sendDate"] = xn.Attributes["sendDate"].Value;
+                    }
+
+                    result = Post(url, queryString.ToString(), Encoding.UTF8);
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+
+                    break;//метод для отправки только одного сообщения
+                }
+            }
+            catch (WebException ex)
+            {
+                if (ex.Response != null)
+                {
+                    var contentStream = ex.Response.GetResponseStream();
+                    if (contentStream != null)
+                    {
+                        using (var reader = new StreamReader(contentStream))
+                        {
+                            requestResult.CreateResult(JsonConvert.DeserializeObject<RequestResult.ErrorResult>(reader.ReadToEnd()).Desc);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                try
+                {
+                    SmsRequest.ResponceData responce = new SmsRequest.ResponceData(JsonConvert.DeserializeObject<List<string>>(result));
+
+                    SmsRequest.Result res = new SmsRequest.Result(responce);
+                    xdox.LoadXml(ObjectToXml(res));
+
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                catch (Exception ex)
+                {
+                    requestResult.CreateResult(ex.Message);
+                }
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+
+            //xdox.Save("test.xml");
+
+            return xdox.OuterXml;
+        }
+
+        private static string StatusSMSMessageDevino(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("StatusSMSMessageDevino");
+            string result = string.Empty;
+            try
+            {
+                string url = xmlDoc.SelectSingleNode("/root/method").Attributes["urlForSend"].Value;
+
+                var httpWebRequest = (HttpWebRequest)WebRequest.Create(url);
+
+                httpWebRequest.Method = "GET";
+                httpWebRequest.ContentType = "application/x-www-form-urlencoded";
+
+                var httpWebResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+                using (var responseStream = new StreamReader(httpWebResponse.GetResponseStream(), Encoding.UTF8))
+                {
+                    result = responseStream.ReadToEnd();
+                }
+
+                requestResult.Message = "OK";
+                requestResult.ResultCode = 1;
+            }
+            catch (WebException ex)
+            {
+                if (ex.Response != null)
+                {
+                    var contentStream = ex.Response.GetResponseStream();
+                    if (contentStream != null)
+                    {
+                        using (var reader = new StreamReader(contentStream))
+                        {
+                            requestResult.CreateResult(JsonConvert.DeserializeObject<RequestResult.ErrorResult>(reader.ReadToEnd()).Desc);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            if (!string.IsNullOrEmpty(result))
+            {
+                try
+                {
+                    SmsStatus.ResponceData responce = JsonConvert.DeserializeObject<SmsStatus.ResponceData>(result);
+
+                    SmsStatus.Result res = new SmsStatus.Result(responce);
+                    xdox = res.GetXML();
+                    //xdox.LoadXml(ObjectToXml(res));
+
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                catch (Exception ex)
+                {
+                    requestResult.CreateResult(ex.Message);
+                }
+            }
+            xdox = requestResult.AddResultToXML(xdox);
+
+            //xdox.Save("test.xml");
+
+            return xdox.OuterXml;
+        }
+
+        private static string WebInsuredInformERIPPay(XmlDocument xmlDoc)
+        {
+            RequestResult requestResult = new RequestResult("WebInsuredInformERIPPay");
+            XmlDocument xdox = new XmlDocument();
+            xdox.LoadXml("<root/>");
+            string result = string.Empty;
+            try
+            {
+                XmlNode methodNode = xmlDoc.SelectSingleNode("/root/method");
+                string url = methodNode.Attributes["urlForSend"].Value;
+                string json = "{\"ERIPNumber\":\"" + methodNode.Attributes["ERIPNumber"].Value + "\"," +
+                  "\"PayDate\":\"" + methodNode.Attributes["payDate"].Value + "\"}";
+
+                PostRequestResult reqResult = SendPostRequest(json, url, Encoding.UTF8);
+
+                if (reqResult.StatusCode == HttpStatusCode.OK)
+                {
+                    requestResult.Message = "OK";
+                    requestResult.ResultCode = 1;
+                }
+                else
+                    requestResult.CreateResult(reqResult.StatusDescription);
+            }
+            catch (Exception ex)
+            {
+                requestResult.CreateResult(ex.Message);
+            }
+
+            xdox = requestResult.AddResultToXML(xdox);
+
+            return xdox.OuterXml;
+        }
+
+        /// <summary>
+        /// Отправка данных в виде NameValueCollection 
+        /// </summary>
+        /// <param name="data">Dictionary данных для отправки</param>
+        /// <param name="url">Url для отправки</param>
+        /// <returns></returns>
+        private static string SendKeyValuePostRequest(Dictionary<string,string> data, string url)
+        {
+            WebClient myWebClient = new WebClient();            
+            NameValueCollection nameValueCollection = new NameValueCollection();
+
+            foreach (var item in data)
+            {
+                nameValueCollection.Add(item.Key, item.Value);
+            }
+            byte[] responseArray = myWebClient.UploadValues(url, "POST", nameValueCollection);
+            
+            return Encoding.UTF8.GetString(responseArray); 
+        }
+
+        /// <summary>
+        /// Отправка POST запроса
+        /// </summary>
+        /// <param name="jsonData">Тело запроса в формате JSON</param>
+        /// <param name="url">Путь отправки запроса</param>
+        /// <param name="encoding">Кодировка для отправки и получения данных</param>
+        /// <returns>Результат запроса</returns>
+        private static PostRequestResult SendPostRequest(string jsonData, string url, Encoding encoding, bool usingSecurityProtocol = true, Dictionary<string, string> headers = null)
+        {
+            PostRequestResult postResult = null;
+
+            // Отключаем проверку подлиности сертификата той стороны
+            //ServicePointManager.ServerCertificateValidationCallback = (a, b, c, d) => true;
+            if (usingSecurityProtocol)
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | (SecurityProtocolType)768 | (SecurityProtocolType)3072 | SecurityProtocolType.Tls;
+            }
+            HttpWebRequest httpReq = (HttpWebRequest)WebRequest.Create(url);
+
+            byte[] postData = encoding.GetBytes(jsonData);
+            httpReq.ContentType = "application/json";
+            httpReq.Method = "POST";
+            httpReq.ContentLength = postData.Length;
+            if (headers != null)
+            {
+                foreach (var item in headers)
+                {
+                    httpReq.Headers.Add(item.Key, item.Value);
+                }
+            }
+
+            using (Stream reqStrim = httpReq.GetRequestStream())
+            {
+                reqStrim.Write(postData, 0, postData.Length);
+                reqStrim.Close();
+
+                using (HttpWebResponse httpResp = (HttpWebResponse)httpReq.GetResponse())
+                {
+                    using (StreamReader respStrm = new StreamReader(httpResp.GetResponseStream(), encoding))
+                    {
+                        postResult = new PostRequestResult(httpResp, respStrm.ReadToEnd());
+                        httpResp.Close();
+                        respStrm.Close();
+                    }
+                }
+            }
+
+            return postResult;
+        }
+        /// <summary>
+        /// Отправка POST запроса
+        /// </summary>
+        /// <param name="url">Путь отправки запроса</param>
+        /// <param name="queryString">Параметры для отправки POST запроса</param>
+        /// <param name="encoding">Кодировка для отправки и получения данных</param>
+        /// <returns>Результат запроса</returns>
+        private static string Post(string url, string queryString, Encoding encoding)
+        {
+            var httpWebRequest = (HttpWebRequest)WebRequest.Create(url);
+            string postResult = string.Empty;
+
+            httpWebRequest.Method = "POST";
+            httpWebRequest.ContentType = "application/x-www-form-urlencoded";
+            if (httpWebRequest.Proxy != null)
+            {
+                httpWebRequest.Proxy.Credentials = CredentialCache.DefaultCredentials;
+            }
+
+            byte[] postData = encoding.GetBytes(queryString);
+            httpWebRequest.ContentLength = postData.Length;
+
+            using (Stream reqStrim = httpWebRequest.GetRequestStream())
+            {
+                reqStrim.Write(postData, 0, postData.Length);
+            }
+
+            using (HttpWebResponse httpResp = (HttpWebResponse)httpWebRequest.GetResponse())
+            {
+                using (StreamReader respStrm = new StreamReader(httpResp.GetResponseStream(), encoding))
+                {
+                    postResult = respStrm.ReadToEnd();
+                    httpResp.Close();
+                    respStrm.Close();
+                }
+            }
+            return postResult;
+        }
+
+        /// <summary>
+        /// Сериализация объекта в XML(строковое представление)
+        /// </summary>
+        /// <param name="obj"></param>
+        /// <returns></returns>
+        private static string ObjectToXml(object obj)
+        {
+            string result = null;
+            var oXmlSerializer = new XmlSerializer(obj.GetType());
+
+            var oStream = new MemoryStream();
+            var oXmlSerializerNamespaces = new XmlSerializerNamespaces();
+            oXmlSerializerNamespaces.Add(string.Empty, string.Empty);
+            var oXmlWriterSettings = new XmlWriterSettings
+            {
+                // Indent = true,
+                //OmitXmlDeclaration = false,
+                //Encoding = Encoding.GetEncoding(1251)
+            };
+
+            var oXmlWriter = XmlWriter.Create(oStream, oXmlWriterSettings);
+            oXmlSerializer.Serialize(oXmlWriter, obj, oXmlSerializerNamespaces);
+            oXmlWriter.Close();
+            oStream.Position = 0;
+            using (var reader = new StreamReader(oStream))
+            {
+                result = reader.ReadToEnd();
+            }
+            result = result.Replace("encoding=\"utf-8\"?", "encoding=\"windows-1251\"?");
+            return result;
+        }
+    }
+}
